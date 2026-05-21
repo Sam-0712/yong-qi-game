@@ -77,7 +77,7 @@ $$
 
 ### 同时行动博弈
 
-《勇气》是同时行动博弈，双方在每一轮无法观测对方出招后再决策。因此传统的 `Minimax` 算法无法直接应用。采用 **反事实遗憾最小化（CFR）** 来逼近纳什均衡，即通过反复自对弈，维护每个信息集（此处为每个状态）下每个动作的累积遗憾，并利用 `Regret Matching` 更新策略，最终平均策略收敛到近似均衡。
+双方在每一轮无法观测对方出招后再决策，因此传统的 `Minimax` 算法无法直接应用。采用 **反事实遗憾最小化（CFR）** 来逼近纳什均衡，即通过反复自对弈，维护每个信息集（此处为每个状态）下每个动作的累积遗憾，并利用 `Regret Matching` 更新策略，最终平均策略收敛到近似均衡。
 
 训练时，按回合逆序遍历所有 DAG。对每个非终止状态 $S$，定义 AI 与玩家的当前策略 $\sigma_\text{ai}, \sigma_\text{pl}$。从累积遗憾 $R_\text{ai}(S, a)$ 计算当前策略：
 
@@ -198,15 +198,12 @@ $$
 其中 $\lambda_{within} = \lambda_{\text{within}-\max} \cdot \displaystyle\frac{T_{m}}{T_{m} + \beta}$，即随观测增加而增加。\[\lambda_{\text{within}-\max}\] 是局内最大混合率。
 
 
-
-
-
 ### 融合策略
 
 级联顺序为先跨局学习，后局内学习：
 
 $$
-\sigma_{cfr} \xrightarrow{\text{跨局}} \sigma_{mid} \xrightarrow{\text{局内}} \sigma_{final}
+\sigma_{cfr} \xrightarrow{\text{cross}} \sigma_{mid} \xrightarrow{\text{within}} \sigma_{final}
 $$
 
 跨局提供长期风格记忆，局内捕捉当前对局的即时趋势。实验表明融合永远优于单一模态。
@@ -234,20 +231,20 @@ $$
 ## 项目结构
 
 ```
-v5/
-  launcher.py        # 入口：人机对战
-  README.md
-  src/
-    game.py          # 核心引擎（纯函数）
-    cfr.py           # CFR/DCFR 训练器
-    adaptive.py      # 自适应层（跨局/局内/融合）
-    personality.py   # 性格系统
-    db.py            # SQLite 数据层（哈希索引）
-  tests/
-    validate.py      # 策略训练 + 验证
-    selfplay_test.py # 自对抗测试
-  data/
-    courage.db        # SQLite 数据库
+/
+├── launcher.py        		# 主入口
+├── README.md           	# 项目说明文档
+├── src/                    # 核心源代码目录
+│   ├── game.py             # 游戏引擎（纯函数式逻辑，无状态）
+│   ├── cfr.py              # CFR/DCFR 算法实现（离线训练）
+│   ├── adaptive.py         # 自适应系统（实时策略调整）
+│   ├── personality.py      # 性格系统（决策风格控制）
+│   └── db.py               # SQLite 数据库层（策略持久化）
+├── tests/                  # 测试目录
+│   ├── validate.py         # 策略验证与评估
+│   └── selfplay_test.py    # AI 自对弈测试
+└── data/                   # 数据存储
+    └── courage.db          # SQLite 数据库文件
 ```
 
 ## 使用方式
