@@ -126,7 +126,7 @@ $$
 
 其中 $w_t$ 为迭代权重。标准 CFR 采用等权重，DCFR 采用线性权重即 $w_t = t$。经过 $T$ 次迭代，平均策略的遗憾上界为 $O(\displaystyle\frac{1}{\sqrt{T}})$，从而近似纳什均衡。
 
-## 加速收敛
+### 加速收敛
 
 DCFR 对正遗憾和负遗憾施加不同的折扣因子，以加速收敛并减少振荡。设第 $t$ 次迭代后的累积遗憾为 $\bar{R}^{t}(a)$，更新方式为：
 
@@ -195,7 +195,7 @@ $$
 \sigma_{final}(a_i) = (1 - \lambda_{within}) \cdot \sigma_{mid}(a_i) + \lambda_{within} \cdot \sigma_{br}^{within}(a_i)
 $$
 
-其中 $\lambda_{within} = \lambda_{\text{within}-\max} \cdot \displaystyle\frac{T_{m}}{T_{m} + \beta}$，即随观测增加而增加。\[\lambda_{\text{within}-\max}\] 是局内最大混合率。
+其中 $\lambda_{within} = \lambda_{\text{within}-\max} \cdot \displaystyle\frac{T_{m}}{T_{m} + \beta}$，即随观测增加而增加。$\lambda_{\text{within}-\max}$ 是局内最大混合率。
 
 
 ### 融合策略
