@@ -20,7 +20,9 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from courage.core.rules import get_valid_moves
-from courage.policy.settings import PlaySettings, apply_settings
+from courage.policy.settings import (
+    PlaySettings, apply_settings, DEFAULT_NOISE_BY_MODE,
+)
 from courage.bots.scripts import bots_by_name
 from courage.sim import play_game
 
@@ -60,6 +62,8 @@ def main() -> None:
     ap.add_argument("--mode", type=int, default=0)
     ap.add_argument("--style", default="balanced")
     ap.add_argument("--difficulty", type=float, default=1.0)
+    ap.add_argument("--noise", type=float, default=None,
+                    help="额外随机噪声；缺省按模式取默认（mode1 更大）")
     ap.add_argument("--games", type=int, default=300)
     ap.add_argument("--cap", type=int, default=200)
     ap.add_argument("--gamma", type=float, default=0.95)
@@ -70,13 +74,14 @@ def main() -> None:
     args = ap.parse_args()
 
     policy = build_policy(args)
-    ai_fn = make_ai(policy, PlaySettings(args.difficulty, args.style), args.mode)
+    noise = args.noise if args.noise is not None else DEFAULT_NOISE_BY_MODE.get(args.mode, 0.0)
+    ai_fn = make_ai(policy, PlaySettings(args.difficulty, args.style, noise), args.mode)
 
     if args.opp == "self":
         def opp_fn(qa, qp):
             legal = get_valid_moves(qp, mode=args.mode)
             base = policy.get((qp, qa)) or {m: 1.0 / len(legal) for m in legal}
-            return apply_settings(base, legal, PlaySettings(1.0, "balanced"))
+            return apply_settings(base, legal, PlaySettings(1.0, "balanced", noise))
     else:
         opp_fn = make_bot(bots_by_name[args.opp], args.mode)
 
@@ -94,7 +99,7 @@ def main() -> None:
             T += 1
 
     n = args.games
-    print(f"AI(style={args.style}, 难度={args.difficulty}) vs {args.opp} | "
+    print(f"AI(style={args.style}, 难度={args.difficulty}, 噪声={noise}) vs {args.opp} | "
           f"games={n} mode={args.mode} cap={args.cap}")
     print(f"  胜 {W}  负 {L}  超时/未决 {T}  |  胜率={W/n:.1%}  不输率={(W+T)/n:.1%}")
     print(f"  回合: 均值={statistics.mean(rounds):.1f}  "

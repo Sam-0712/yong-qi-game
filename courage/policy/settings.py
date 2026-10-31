@@ -39,14 +39,20 @@ STYLE_BIAS: Dict[str, Dict[str, float]] = {
 class PlaySettings:
     difficulty: float = 1.0
     style: str = "balanced"
+    # 额外随机噪声 ∈ [0,1]：在难度混合之上再叠一层均匀混合，
+    # 主要用于打破低气/无气拨等长循环（如 mode1）。
+    noise: float = 0.0
 
     def clamped_difficulty(self) -> float:
         return min(1.0, max(0.0, float(self.difficulty)))
 
+    def clamped_noise(self) -> float:
+        return min(1.0, max(0.0, float(self.noise)))
+
 
 def apply_settings(policy: Dict[str, float], legal: List[str],
                    settings: PlaySettings) -> Dict[str, float]:
-    """把求解器策略变成最终出手分布（风格偏置 + 难度混合）。"""
+    """把求解器策略变成最终出手分布（风格偏置 + 难度混合 + 噪声）。"""
     bias = STYLE_BIAS.get(settings.style, {})
     p = {}
     for m in legal:
@@ -57,8 +63,17 @@ def apply_settings(policy: Dict[str, float], legal: List[str],
         s = float(len(legal))
     p = {m: v / s for m, v in p.items()}
 
-    d = settings.clamped_difficulty()
     u = 1.0 / len(legal)
+    d = settings.clamped_difficulty()
     q = {m: d * p[m] + (1.0 - d) * u for m in legal}
+
+    nz = settings.clamped_noise()
+    if nz > 0.0:
+        q = {m: (1.0 - nz) * q[m] + nz * u for m in legal}
+
     t = sum(q.values())
     return {m: v / t for m, v in q.items()}
+
+
+# 各模式默认盘外随机噪声：无气拨模式天生易长循环，给更大噪声。
+DEFAULT_NOISE_BY_MODE: Dict[int, float] = {0: 0.0, 1: 0.3}
