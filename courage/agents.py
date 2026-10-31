@@ -114,8 +114,8 @@ class OnlineBRAgent:
                  opp_open_stats: Optional[Dict[str, float]] = None,
                  eq_policy=None, conf_scale: float = 1.5, robust: float = 0.0,
                  eq_mix: Optional[float] = None,
-                 round_total: int = 15, noise0: float = 0.30,
-                 urgency: float = 3.0,
+                 round_total: int = 15, noise0: float = 0.0,
+                 urgency: float = 3.0, anti_loop: bool = True,
                  belief_like=None, rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -145,6 +145,8 @@ class OnlineBRAgent:
         self.round_total = max(1, int(round_total))
         self.noise0 = noise0
         self.urgency = urgency
+        self.anti_loop = anti_loop
+        self._hist = []          # [(state, our_move)]，用于周期检测
         self._last_opening = None
         self._start_qi = 0 if mode == 1 else 3
         self.rng = rng or random.Random()
@@ -203,6 +205,47 @@ class OnlineBRAgent:
         step = self.step_cost * (1.0 + self.urgency * p)
         return noise, step
 
+    # ── 循环检测（直接防局部死锁，比全局随机精确）──
+    #
+    # 死锁实测发生在 (1,1)：双方都选 cost=0 的「防御/跳」，气数永远不变，
+    # 于是局面精确复现。全局 noise 能打破它，但代价是把正确招也随机掉
+    # （实测 (0,0) 该出吐气的定理级最优，被 noise 污染成 82%）。
+    #
+    # 正确做法是**只在检测到周期时**主动偏离：把"上一周期里在同一个状态
+    # 已经用过的招"排除，优先选能改变气数的那一手。这样平时策略完全不变，
+    # 只在真正开始打转时出手。
+    def _detect_cycle(self, max_period: int = 5) -> int:
+        """返回最近序列的周期长度；无周期返回 0。"""
+        h = self._hist
+        n = len(h)
+        for p in range(1, max_period + 1):
+            if n >= 2 * p and h[-p:] == h[-2 * p:-p]:
+                return p
+        return 0
+
+    def _loop_break(self, own: int, opp: int, legal: List[str],
+                    base: Dict[str, float]) -> Optional[str]:
+        """若陷入周期，返回一个打破僵局的招；否则 None。"""
+        if not self.anti_loop:
+            return None
+        p = self._detect_cycle()
+        if p <= 0:
+            return None
+        used = {m for (s, m) in self._hist[-p:] if s == (own, opp)}
+        alt = [m for m in legal if m not in used]
+        if not alt:
+            # 周期里已把这状态的所有招都用过了 → 换"能改气数"的招
+            alt = [m for m in legal if next_qi(own, m) != own]
+        if not alt:
+            return None
+        # 优先能改变气数的（否则只是换个姿势继续僵持），再按原策略权重挑
+        progress = [m for m in alt if next_qi(own, m) != own]
+        pool = progress or alt
+        return max(pool, key=lambda m: base.get(m, 0.0))
+
+    def _round_dyn_unused(self):
+        pass
+
     def act(self, own, opp):
         # 开局：仅在真正的开局状态（双方起始气）按「开局簿」采样，保证首招随机且各招可达。
         # 注意不能只看 steps==0——若首回合发生在 (0,0)（无气拨模式）或异常状态，
@@ -214,6 +257,7 @@ class OnlineBRAgent:
                                          opp_open=self.opp_opening_pred())
             if m is not None:
                 self._last_opening = m
+                self._hist.append(((own, opp), m))
                 return m
         noise, step = self._round_dyn()
         opp_pol = self._opp_policy_from_belief()
@@ -232,9 +276,17 @@ class OnlineBRAgent:
             else:
                 lam = confidence(getattr(self.belief, "steps", 0), self.conf_scale)
             base = blend(self.eq_policy.get((own, opp)), base, lam)
-        dyn = PlaySettings(self.settings.difficulty, self.settings.style,
-                           max(self.settings.noise, noise))
-        return sample_policy(apply_settings(base, legal, dyn), self.rng)
+        dist = apply_settings(base, legal,
+                              PlaySettings(self.settings.difficulty,
+                                           self.settings.style,
+                                           max(self.settings.noise, noise)))
+        # 循环检测：只在真的开始打转时偏离（平时完全不干预）
+        forced = self._loop_break(own, opp, legal, dist)
+        m = forced if forced is not None else sample_policy(dist, self.rng)
+        self._hist.append(((own, opp), m))
+        if len(self._hist) > 24:
+            self._hist.pop(0)
+        return m
 
     def observe(self, own, opp, own_move, opp_move):
         self.belief.observe(own_move, opp_move)
@@ -242,6 +294,7 @@ class OnlineBRAgent:
     def reset(self):
         # 跨局记忆：persist=True 时保留信念，仅每局由上层决定是否清零
         self._last_opening = None
+        self._hist = []
         if not self.persist:
             self.belief.reset()
 

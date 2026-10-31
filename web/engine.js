@@ -325,7 +325,9 @@
         mode: 0, gamma: 0.95, stepCost: 0.03, brSweeps: 80,
         tau: 1.0, floor: 0.0, difficulty: 1.0, style: "balanced", noise: 0.0,
         prior: "none", seed: 12345, robust: 0.3, opening: true, belief: "auto",
-        roundTotal: 15, noise0: 0.30, urgency: 3.0, zeroPenalty: 0.4,
+        // noise0 默认 0：全局随机会把定理级正确的最优招一起随机掉
+        // （(0,0) 该出吐气，被 noise 0.30 污染到 82%）。防死锁交给 antiLoop。
+        roundTotal: 15, noise0: 0.0, urgency: 3.0, zeroPenalty: 0.4, antiLoop: true,
       }, cfg);
       const enc = (typeof globalThis !== "undefined" && globalThis.CourageEncoder) || null;
       const wantGru = this.cfg.belief === "gru"
@@ -341,7 +343,7 @@
       let x = this.seed; x ^= x << 13; x >>>= 0; x ^= x >> 17; x ^= x << 5; x >>>= 0;
       this.seed = x; return x / 4294967296;
     }
-    reset() { this.belief.reset(); this.lastOwn = null; }
+    reset() { this.belief.reset(); this.lastOwn = null; this._hist = []; }
     observe(own, opp) { this.belief.observe(own, opp); this.lastOwn = own; }
 
     _oppTable() {
@@ -385,6 +387,41 @@
           f.long_dodge, f.long_exhale, f.long_noqi);
       }
       return 1 / 6;
+    }
+
+    // ── 循环检测：直接防局部死锁，比全局随机精确 ──
+    // 实测死锁发生在 (1,1)：双方都出 cost=0 的「防御/跳」，气数永远不变，
+    // 局面精确复现。全局 noise 也能打断，但代价是把正确招一起随机掉
+    // （(0,0) 该出吐气，被 noise 污染到 82%）。所以只在"真的开始打转"时偏离。
+    _detectCycle(maxP) {
+      const h = this._hist || [];
+      const n = h.length;
+      const mp = maxP || 5;
+      for (let p = 1; p <= mp; p++) {
+        if (n < 2 * p) continue;
+        let same = true;
+        for (let i = 0; i < p; i++) {
+          const a = h[n - p + i], b = h[n - 2 * p + i];
+          if (a.s !== b.s || a.m !== b.m) { same = false; break; }
+        }
+        if (same) return p;
+      }
+      return 0;
+    }
+
+    _loopBreak(qa, qp, legal, dist) {
+      if (!this.cfg.antiLoop) return null;
+      const p = this._detectCycle();
+      if (!p) return null;
+      const h = this._hist, key = SID(qa, qp);
+      const used = new Set();
+      for (let i = h.length - p; i < h.length; i++) if (h[i].s === key) used.add(h[i].m);
+      let alt = legal.filter((m) => !used.has(m));
+      if (!alt.length) alt = legal.filter((m) => nextQi(qa, m) !== qa);
+      if (!alt.length) return null;
+      const prog = alt.filter((m) => nextQi(qa, m) !== qa);
+      const pool = prog.length ? prog : alt;
+      return pool.reduce((x, y) => ((dist[x] || 0) >= (dist[y] || 0) ? x : y));
     }
 
     // 轮数退火：前几轮多随机（避免双方早早同步成镜像循环），末段收敛执行策略；
@@ -476,7 +513,10 @@
       // 而实测 (0,0) 的最优是唯一解「吐气」。
       const start = this.cfg.mode === 1 ? 0 : 3;
       if (this.cfg.opening && this.belief.steps === 0 && qa === start && qp === start) {
-        return this._openingMove(legal0);
+        const om = this._openingMove(legal0);
+        if (!this._hist) this._hist = [];
+        this._hist.push({ s: SID(qa, qp), m: om });
+        return om;
       }
       const dyn = this._roundDyn();
       const table = this._oppTable();
@@ -504,7 +544,12 @@
         for (const m of legal) r[m] /= t2;
         q = r;
       }
-      return sample(q, () => this._rnd());
+      const forced = this._loopBreak(qa, qp, legal, q);
+      const m = forced !== null ? forced : sample(q, () => this._rnd());
+      if (!this._hist) this._hist = [];
+      this._hist.push({ s: SID(qa, qp), m });
+      if (this._hist.length > 24) this._hist.shift();
+      return m;
     }
   }
 
