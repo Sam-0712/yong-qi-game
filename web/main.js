@@ -14,9 +14,10 @@
 
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch (e) { return {}; } })();
   const cfg = {
-    mode: saved.mode ?? 0, tau: 1.0, stepCost: 0.03, brSweeps: 80,
+    mode: saved.mode ?? 0, tau: 2.0, stepCost: 0.03, brSweeps: 80,
     difficulty: saved.difficulty ?? 1.0, style: saved.style ?? "balanced",
     noise: (saved.mode === 1) ? 0.3 : 0.0, prior: "none",
+    belief: "gru",   // 序列编码器（缺失时自动回退到手写信念）
   };
 
   let ai = new E.AI(cfg);
@@ -89,8 +90,11 @@
     cfg.mode = +$("mode").value;
     cfg.noise = cfg.mode === 1 ? 0.3 : 0.0;
     syncAI();
-    ai = new E.AI({ mode: cfg.mode, tau: 1, stepCost: cfg.stepCost, brSweeps: cfg.brSweeps,
-      difficulty: cfg.difficulty, style: cfg.style, noise: cfg.noise, prior: "none", seed: (Date.now() % 1e9) | 0 });
+    ai = new E.AI({ mode: cfg.mode, tau: cfg.tau, stepCost: cfg.stepCost, brSweeps: cfg.brSweeps,
+      difficulty: cfg.difficulty, style: cfg.style, noise: cfg.noise, prior: "none",
+      belief: cfg.belief, seed: (Date.now() % 1e9) | 0 });
+    const badge = $("beliefTag");
+    if (badge) badge.textContent = ai.beliefKind === "gru" ? "GRU 编码器" : "手写信念";
     qa = qp = cfg.mode === 1 ? 0 : 3; round = 0; started = true; over = false;
     $("aiMove").textContent = "—"; $("plMove").textContent = "—";
     $("startBtn").textContent = "重新开始";

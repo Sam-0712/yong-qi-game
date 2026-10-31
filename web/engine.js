@@ -181,6 +181,123 @@
     }
   }
 
+  // ── GRU 编码器信念（与 Python 的 EncoderBelief 对齐）──
+  // 输入 (own, opp) 出招序列 → 14 个信念因子 → 对手动作分布。
+  // 因子语义与手写信念一致，只是"算法"从统计式换成了学习式（3.4k 参数）。
+  const FACTOR_KEYS = [
+    "long_atk", "long_heavy", "long_def", "long_dodge", "long_exhale", "long_noqi",
+    "short_atk", "attack_streak", "switch", "predictability", "mirror",
+    "volatility", "escalation", "threat",
+  ];
+  const CAT_OF = {
+    "馒头": "attack", "双馒": "attack", "雷切": "attack",
+    "螺旋环": "heavy", "咏春": "heavy",
+    "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
+  };
+
+  function _sig(x) { return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, x)))); }
+
+  function mv(W, v) {           // 矩阵(行) × 向量
+    const out = new Array(W.length);
+    for (let i = 0; i < W.length; i++) {
+      const row = W[i];
+      let s = 0;
+      for (let j = 0; j < row.length; j++) s += row[j] * v[j];
+      out[i] = s;
+    }
+    return out;
+  }
+
+  // 逐步前向，返回最后一步的 14 个因子
+  function gruLastStep(enc, ownSeq, oppSeq) {
+    const H = enc.hidden, N = MOVES.length;
+    let h = new Array(H).fill(0);
+    let y = null;
+    const T = Math.min(ownSeq.length, oppSeq.length);
+    for (let t = 0; t < T; t++) {
+      const x = new Array(2 * N).fill(0);
+      const oi = MOVES.indexOf(ownSeq[t]), pi = MOVES.indexOf(oppSeq[t]);
+      if (oi >= 0) x[oi] = 1;
+      if (pi >= 0) x[N + pi] = 1;
+      const zx = mv(enc.Wz, x), zh = mv(enc.Uz, h);
+      const z = new Array(H);
+      for (let i = 0; i < H; i++) z[i] = _sig(zx[i] + zh[i] + enc.bz[i]);
+      const rx = mv(enc.Wr, x), rh0 = mv(enc.Ur, h);
+      const rh = new Array(H);
+      for (let i = 0; i < H; i++) rh[i] = h[i] * _sig(rx[i] + rh0[i] + enc.br[i]);
+      const nx = mv(enc.Wn, x), nh = mv(enc.Un, rh);
+      const n = new Array(H);
+      for (let i = 0; i < H; i++) n[i] = Math.tanh(nx[i] + nh[i] + enc.bn[i]);
+      h = h.map((hp, i) => (1 - z[i]) * n[i] + z[i] * hp);
+      const yx = mv(enc.Wo, h), yh = new Array(enc.Wo.length);
+      for (let i = 0; i < yx.length; i++) yh[i] = _sig(yx[i] + enc.bo[i]);
+      y = yh;
+    }
+    return y || new Array(FACTOR_KEYS.length).fill(1 / 6);
+  }
+
+  class EncoderBelief {
+    constructor(enc, opts = {}) {
+      this.enc = enc;
+      this.maxLen = opts.max_len ?? 24;
+      this.smooth = opts.smooth ?? 0.05;
+      this.tau = opts.tau ?? 1.0;
+      this.floor = opts.floor ?? 0.0;
+      this.own = []; this.opp = []; this.lastOwn = null; this.steps = 0;
+    }
+    reset() { this.own = []; this.opp = []; this.lastOwn = null; this.steps = 0; }
+    observe(ownMove, oppMove) {
+      if (!oppMove) return;
+      this.own.push(ownMove); this.opp.push(oppMove);
+      if (this.own.length > this.maxLen) { this.own.shift(); this.opp.shift(); }
+      this.lastOwn = ownMove;
+      this.steps += 1;
+    }
+    factors() {
+      if (!this.own.length) {
+        const u = 1 / 6, f = {};
+        FACTOR_KEYS.forEach((k) => { f[k] = u; });
+        return f;
+      }
+      const row = gruLastStep(this.enc, this.own, this.opp);
+      const f = {};
+      FACTOR_KEYS.forEach((k, i) => { f[k] = row[i]; });
+      return f;
+    }
+    oppWeights(legal, lastOwn) {
+      const f = this.factors();
+      const cl = {
+        attack: f.long_atk, heavy: f.long_heavy, defense: f.long_def,
+        dodge: f.long_dodge, exhale: f.long_exhale, noqi: f.long_noqi,
+      };
+      const cs = Object.assign({}, cl, { attack: f.short_atk });
+      const ws = f.switch;
+      let cw = {};
+      for (const c of CATS) cw[c] = (1 - ws) * cl[c] + ws * cs[c];
+      if (this.floor > 0) for (const c of CATS) cw[c] = Math.max(0, cw[c] - this.floor);
+      if (this.tau !== 1) for (const c of CATS) cw[c] = Math.pow(cw[c], this.tau);
+      if (f.attack_streak > 0) {
+        cw.attack *= 1 + 1.5 * f.attack_streak;
+        cw.heavy *= 1 + 1.0 * f.attack_streak;
+      }
+      const w = {};
+      let s = 0;
+      for (const m of legal) { const v = (cw[CAT_OF[m]] || 0) + 1e-6; w[m] = v; s += v; }
+      if (s > 0) for (const m of legal) w[m] /= s;
+      const lo = lastOwn ?? this.lastOwn;
+      if (lo != null && f.mirror > 0.3 && w[lo] != null) {
+        w[lo] += f.mirror;
+        let s2 = 0; for (const m of legal) s2 += w[m];
+        for (const m of legal) w[m] /= s2;
+      }
+      if (this.smooth > 0) {
+        const u = 1 / legal.length;
+        for (const m of legal) w[m] = (1 - this.smooth) * w[m] + this.smooth * u;
+      }
+      return w;
+    }
+  }
+
   function sample(dist, rnd) {
     let r = rnd(), c = 0, last = null;
     for (const m in dist) { last = m; c += dist[m]; if (r <= c) return m; }
@@ -194,9 +311,15 @@
       this.cfg = Object.assign({
         mode: 0, gamma: 0.95, stepCost: 0.03, brSweeps: 80,
         tau: 1.0, floor: 0.0, difficulty: 1.0, style: "balanced", noise: 0.0,
-        prior: "none", seed: 12345, robust: 0.3, opening: true,
+        prior: "none", seed: 12345, robust: 0.3, opening: true, belief: "auto",
       }, cfg);
-      this.belief = new Belief({ prior: PRIORS[this.cfg.prior] });
+      const enc = (typeof globalThis !== "undefined" && globalThis.CourageEncoder) || null;
+      const wantGru = this.cfg.belief === "gru"
+        || (this.cfg.belief === "auto" && !!enc);
+      this.beliefKind = (wantGru && enc) ? "gru" : "hand";
+      this.belief = this.beliefKind === "gru"
+        ? new EncoderBelief(enc, { tau: this.cfg.tau, smooth: 0.05 })
+        : new Belief({ prior: PRIORS[this.cfg.prior] });
       this.seed = this.cfg.seed >>> 0;
       this.lastOwn = null;
     }
@@ -212,9 +335,7 @@
       // 幽灵威胁权重：越看不清对手越大；看清了(volatility 低)就放开剥削
       let beta = 0;
       if (this.cfg.robust > 0) {
-        const [lp] = this.belief._props();
-        const maxp = Math.max(...CATS.map((c) => lp[c]));
-        beta = this.cfg.robust * Math.max(0, 1 - maxp);
+        beta = this.cfg.robust * Math.max(0, 1 - this._maxCat());
       }
       for (let qa = 0; qa <= 5; qa++) for (let qp = 0; qp <= 5; qp++) {
         const legalB = validMoves(qp, mode);
@@ -232,6 +353,20 @@
         table[SID(qa, qp)] = w;
       }
       return table;
+    }
+
+    _maxCat() {
+      const b = this.belief;
+      if (b._props) {
+        const lp = b._props()[0];
+        return Math.max(...CATS.map((c) => lp[c] || 0));
+      }
+      const f = b.factors ? b.factors() : null;
+      if (f) {
+        return Math.max(f.long_atk, f.long_heavy, f.long_def,
+          f.long_dodge, f.long_exhale, f.long_noqi);
+      }
+      return 1 / 6;
     }
 
     _openingMove(legal) {
@@ -332,7 +467,8 @@
     }
   }
 
-  const api = { MOVES, ATTR, CATEGORIES, CATS, STYLE_BIAS, PRIORS, judge, validMoves, nextQi, Belief, AI, sample };
+  const api = { MOVES, ATTR, CATEGORIES, CATS, STYLE_BIAS, PRIORS, FACTOR_KEYS,
+    judge, validMoves, nextQi, Belief, EncoderBelief, gruFactors: gruLastStep, AI, sample };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   global.CourageEngine = api;
 })(typeof window !== "undefined" ? window : globalThis);

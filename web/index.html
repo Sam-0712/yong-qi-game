@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>勇气 5.0 · 对局</title>
-  <meta name="description" content="勇气 5.0：序列编码器 → 信念因子 → 校准 → 解析最佳响应。纯前端运行。">
+  <meta name="description" content="勇气 5.0：GRU 序列编码器 → 信念因子 → 校准 → 解析最佳响应。纯前端运行（3.4k 参数，浏览器内推理）。">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
         <span class="logo">勇</span>
         <div>
           <h1>勇气 <em>5.0</em></h1>
-          <p>序列编码器 · 信念因子 · 校准 · 解析最佳响应</p>
+          <p>GRU 序列编码器 · 信念因子 · 校准 · 解析最佳响应</p>
         </div>
       </div>
       <button id="themeBtn" class="ghost" aria-label="切换深浅主题" title="切换主题">◐</button>
@@ -22,7 +22,7 @@
 
     <main class="arena">
       <section class="panel ai">
-        <div class="who"><span class="dot ai-dot"></span> AI <span id="aiStyle" class="tag">平衡型</span></div>
+        <div class="who"><span class="dot ai-dot"></span> AI <span id="aiStyle" class="tag">平衡型</span> <span id="beliefTag" class="tag alt">GRU 编码器</span></div>
         <div class="qi" id="aiQi"></div>
         <div class="move" id="aiMove">—</div>
       </section>
@@ -66,6 +66,7 @@
     <footer class="foot">勇气 5.0 · 序列→因子→校准→解析BR · 纯前端运行（手写信念）</footer>
   </div>
 
+  <script src="encoder_gru.js"></script>
   <script src="engine.js"></script>
   <script src="main.js"></script>
 </body>
