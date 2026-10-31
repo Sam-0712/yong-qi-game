@@ -233,10 +233,14 @@ def predict_factors(model, own_hist: List[str], opp_hist: List[str]) -> Dict[str
 class EncoderBelief:
     """用编码器替代手写信念，接口对齐 BeliefTracker（供 BR 使用）。"""
 
-    def __init__(self, model, max_len: int = 24, smooth: float = 0.05):
+    def __init__(self, model, max_len: int = 24, smooth: float = 0.05,
+                 tau: float = 1.0, floor: float = 0.0):
         self.model = model
         self.max_len = max_len
         self.smooth = smooth
+        # 校准：tau>1 锐化(压低小概率残余)、floor 截断小概率噪声
+        self.tau = tau
+        self.floor = floor
         self.own: List[str] = []
         self.opp: List[str] = []
         self.last_own = None
@@ -275,6 +279,11 @@ class EncoderBelief:
         cat_short["attack"] = f["short_atk"]
         ws = f["switch"]
         cat_w = {c: (1 - ws) * cat_long[c] + ws * cat_short[c] for c in CATS}
+        # 校准：截断小概率残差 + 锐化，抑制"幻影攻击"导致的过度谨慎
+        if self.floor > 0:
+            cat_w = {c: max(0.0, cat_w[c] - self.floor) for c in CATS}
+        if self.tau != 1.0:
+            cat_w = {c: (cat_w[c] ** self.tau) for c in CATS}
         if f["attack_streak"] > 0:
             cat_w["attack"] *= (1 + 1.5 * f["attack_streak"])
             cat_w["heavy"] *= (1 + 1.0 * f["attack_streak"])

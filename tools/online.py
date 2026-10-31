@@ -52,7 +52,8 @@ def run_all(args):
     print(f"{'对手':<10}{'在线信念-BR':<44}{'固定均衡':<30}")
     for name in bots_by_name:
         opp1 = BotAgent(bots_by_name[name])
-        belief = EncoderBelief(encoder_model) if encoder_model is not None else None
+        belief = (EncoderBelief(encoder_model, tau=args.enc_tau, floor=args.enc_floor)
+                  if encoder_model is not None else None)
         online = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
                                alpha=args.alpha, smooth=args.smooth,
                                step_cost=args.step_cost, br_sweeps=args.br_sweeps,
@@ -163,6 +164,10 @@ def main() -> None:
                     help="冷启动先验（none=均匀）")
     ap.add_argument("--encoder-file", dest="encoder_file", default="",
                     help="用序列编码器替代手写信念（A/B）")
+    ap.add_argument("--enc-tau", dest="enc_tau", type=float, default=1.0,
+                    help="编码器因子锐化(校准)")
+    ap.add_argument("--enc-floor", dest="enc_floor", type=float, default=0.0,
+                    help="编码器因子小概率截断(校准)")
     ap.add_argument("--load-belief", dest="load_belief", action="store_true",
                     help="从 SQLite 加载该对手的记忆")
     ap.add_argument("--save-belief", dest="save_belief", action="store_true",
