@@ -108,9 +108,14 @@ class OnlineBRAgent:
                  step_cost: float = 0.03, br_sweeps: int = 600, persist: bool = False,
                  prior: Optional[Dict[str, float]] = None, prior_strength: float = 3.0,
                  qi_floor: int = 0, floor_win: float = 1.0, temp: float = 0.0,
+                 death_penalty: float = 0.0, kappa: float = 0.0,
+                 zero_penalty: float = 0.0,
                  opening_book=None,
                  opp_open_stats: Optional[Dict[str, float]] = None,
                  eq_policy=None, conf_scale: float = 1.5, robust: float = 0.0,
+                 eq_mix: Optional[float] = None,
+                 round_total: int = 15, noise0: float = 0.30,
+                 urgency: float = 3.0,
                  belief_like=None, rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -120,11 +125,26 @@ class OnlineBRAgent:
         self.qi_floor = qi_floor
         self.floor_win = floor_win
         self.temp = temp
+        self.death_penalty = death_penalty
+        self.kappa = kappa
+        self.zero_penalty = zero_penalty
         self.opening_book = opening_book
         self.opp_open_stats = opp_open_stats or {}
         self.eq_policy = eq_policy          # 安全网：均衡策略（None=纯 BR）
         self.conf_scale = conf_scale
+        self.eq_mix = eq_mix
         self.robust = robust
+        # ── 轮数退火（round annealing）──
+        # 实测死锁：双方都按确定性 argmax 出招时会形成镜像循环
+        #   (0,0) 吐气 → (1,1) 馒头 → (0,0) 吐气 → …   可以无限平局
+        # 根因是"策略比重"恒定：前几轮信息量极少，π 却已经和后期一样"自信"，
+        # 于是双方一拍即合同步循环；而 step_cost 恒定，也让"再来一回合"不痛。
+        # 所以三个量都随进度 p = 已过回合/预期长度 变化：
+        #   noise(p)：p=0 时 0.30（多随机、早探路）→ p=1 时 0（果断执行策略）
+        #   step_cost(p)：0.03 → 0.03·(1+urgency)（越拖越亏，逼出破局手）
+        self.round_total = max(1, int(round_total))
+        self.noise0 = noise0
+        self.urgency = urgency
         self._last_opening = None
         self._start_qi = 0 if mode == 1 else 3
         self.rng = rng or random.Random()
@@ -140,14 +160,16 @@ class OnlineBRAgent:
 
     def _opp_policy_from_belief(self) -> Dict[Tuple[int, int], Dict[str, float]]:
         pol = {}
-        # 「看不清对手」时才启用幽灵威胁；看清了就放开剥削
+        # 幽灵威胁权重：按**观测样本量**衰减，但**永不归零**。
+        # 旧版用 volatility 调制，等价于"看得越清越不设防"——于是对手只要先演
+        # 几手温顺牌，AI 就把"它会兑现优势"这个假设完全丢掉，随即被反杀。
+        # 现在：样本少 → 接近 robust（保守）；样本多 → 降到 1/4，保留最低限度的
+        # 「对手可能变招」的假设。这才是对自适应对手的正确定价。
         beta = 0.0
         if self.robust > 0:
-            try:
-                vol = float(self.belief.factors().get("volatility", 1.0))
-            except Exception:
-                vol = 1.0
-            beta = self.robust * vol
+            n = float(getattr(self.belief, "steps", 0) or 0)
+            conf = n / (n + 6.0)          # 0 → 0; 6 步 → 0.5; 60 步 → 0.91
+            beta = self.robust * (1.0 - 0.75 * conf)
         for (qa, qp) in self._all:
             legal = get_valid_moves(qp, mode=self.mode)
             w = self.belief.opp_weights(legal, last_own=self.belief.last_own)
@@ -168,6 +190,19 @@ class OnlineBRAgent:
             return None
         return {m: v / s for m, v in self.opp_open_stats.items() if v > 0}
 
+    def _round_dyn(self) -> tuple:
+        """轮数退火：返回 (noise, step_cost)，都随对局进度变化。
+
+        p = 已过回合 / (预期回合数-1)，截断到 [0,1]。
+        - noise：前几轮大（避免双方早早同步成镜像循环），末段收敛到 0（执行策略）。
+        - step_cost：末段放大 (1+urgency) 倍（每多拖一回合代价更高，逼出破局手）。
+        """
+        r = float(getattr(self.belief, "steps", 0) or 0)
+        p = min(1.0, max(0.0, r / max(self.round_total - 1, 1)))
+        noise = self.noise0 * (1.0 - p)
+        step = self.step_cost * (1.0 + self.urgency * p)
+        return noise, step
+
     def act(self, own, opp):
         # 开局：仅在真正的开局状态（双方起始气）按「开局簿」采样，保证首招随机且各招可达。
         # 注意不能只看 steps==0——若首回合发生在 (0,0)（无气拨模式）或异常状态，
@@ -180,19 +215,26 @@ class OnlineBRAgent:
             if m is not None:
                 self._last_opening = m
                 return m
+        noise, step = self._round_dyn()
         opp_pol = self._opp_policy_from_belief()
         br = solve_best_response(self.mode, opp_pol, gamma=self.gamma,
                                  max_sweeps=self.br_sweeps, tol=1e-5,
-                                 step_cost=self.step_cost, tables=self.T,
+                                 step_cost=step, tables=self.T,
                                  qi_floor=self.qi_floor, floor_win=self.floor_win,
-                                 temp=self.temp)
+                                 temp=self.temp, death_penalty=self.death_penalty,
+                                 kappa=self.kappa, zero_penalty=self.zero_penalty)
         legal = get_valid_moves(own, mode=self.mode)
         base = br.policy.get((own, opp)) or {m: 1.0 / len(legal) for m in legal}
         # 安全网：无信息时用均衡混合（随机、不可被脚本化），有信息后转向 BR 剥削
         if self.eq_policy is not None:
-            lam = confidence(getattr(self.belief, "steps", 0), self.conf_scale)
+            if self.eq_mix is not None:
+                lam = self.eq_mix        # 固定混合比（消融用）
+            else:
+                lam = confidence(getattr(self.belief, "steps", 0), self.conf_scale)
             base = blend(self.eq_policy.get((own, opp)), base, lam)
-        return sample_policy(apply_settings(base, legal, self.settings), self.rng)
+        dyn = PlaySettings(self.settings.difficulty, self.settings.style,
+                           max(self.settings.noise, noise))
+        return sample_policy(apply_settings(base, legal, dyn), self.rng)
 
     def observe(self, own, opp, own_move, opp_move):
         self.belief.observe(own_move, opp_move)

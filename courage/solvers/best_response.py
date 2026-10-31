@@ -81,25 +81,69 @@ def solve_best_response(mode: int,
                         tol: float = 1e-7, step_cost: float = 0.0,
                         tables: Tables | None = None,
                         qi_floor: int = 0, floor_win: float = 0.5,
-                        temp: float = 0.0) -> BRResult:
+                        temp: float = 0.0,
+                        death_penalty: float = 0.0,
+                        kappa: float = 0.0,
+                        zero_penalty: float = 0.0) -> BRResult:
     """单边最佳响应。
 
-    step_cost>0 ：每回合扣 c，惩罚无限平局、鼓励主动破局。
-    qi_floor    ：气数储备下限（0=关闭），见 _allowed_actions。
-    temp>0      ：对 Q 做 softmax（而非硬 argmax），消解"确定性可被脚本化"。
+    step_cost     ：每回合扣 c，惩罚无限平局、鼓励主动破局。
+    qi_floor      ：气数储备下限（0=关闭），见 _allowed_actions。
+    temp>0        ：对 Q 做 softmax（而非硬 argmax），消解"确定性可被脚本化"。
+    death_penalty ：风险厌恶。把"本回合立即输"的终局收益从 -1 放大到 -(1+ρ)，
+                    而"少一口气/平局"不受影响。
+    kappa>0       ：min-混合（鲁棒）。Q = (1-κ)·E_μ[V] + κ·min_{b∈supp(μ)} V。
+
+                    为什么必须有：单边"对手模型"是**循环依赖**的——我出防御，
+                    对手就用能破防的招；我出跳，对手就换雷切。按固定 μ 取期望
+                    等于假设对手不会针对我，于是 BR 在低气局面会算出"V(0,3)=+0.69"
+                    这种荒谬的乐观值（因为 μ 恰好把对手的招猜成了对我们有利的
+                    那种），进而认为"把气打光也无所谓"，开局就出雷切自毁。
+
+                    κ 与 μ 的置信度反向：看不清对手时更要按最坏情况定价。
     """
     T = tables if tables is not None else build_tables(mode)
     S = len(T.states)
     Y = _opp_matrix(T, opp_policy)
     allow = _allowed_actions(T, Y, qi_floor, floor_win)
 
+    # 终局收益矩阵；death_penalty 放大失败分支
+    pay = T.pay
+    if death_penalty > 0:
+        pay = pay - death_penalty * np.maximum(0.0, -pay)
+
+    # 只在 μ 的支撑集上取最坏值：对手不会出的招不该影响定价
+    support = (Y > 1e-6)[:, None, :]
+
+    # 「归零」惩罚：把气打到 0 之后进入的状态，价值按 V-w 计。
+    # 为什么：0 气没有攻击招，只能靠对手失误才爬得回来。而单边 μ 无法表达
+    # "对手会针对我"（我出防御它就换破防招），于是 V(0,·) 被系统性高估
+    # （实测 +0.69，而真实对局里从 0 气翻盘几乎是 0）。这一项把高估的部分
+    # 扣回来，只影响**续接**分支，"本回合直接获胜"不受影响。
+    if zero_penalty > 0:
+        zero_mask = np.zeros((S, T.maskA.shape[1]), dtype=np.float64)
+        for si, (qa, _qp) in enumerate(T.states):
+            for i, a in enumerate(T.movesA[si]):
+                if next_qi(qa, a) == 0:
+                    zero_mask[si, i] = 1.0
+    else:
+        zero_mask = None
+
     V = np.zeros(S)
     Q = np.zeros((S, T.maskA.shape[1]))
     sweeps = 0
     for sw in range(1, max_sweeps + 1):
         sweeps = sw
-        M = np.where(T.term, T.pay, gamma * V[T.succ] - step_cost)
-        Q = np.einsum("sab,sb->sa", M, Y)
+        cont = gamma * V[T.succ] - step_cost
+        if zero_mask is not None:
+            cont = cont - zero_penalty * zero_mask[:, :, None]
+        M = np.where(T.term, pay, cont)
+        if kappa > 0:
+            Msup = np.where(support, M, 1e9)
+            Qworst = Msup.min(2)
+            Q = (1.0 - kappa) * np.einsum("sab,sb->sa", M, Y) + kappa * Qworst
+        else:
+            Q = np.einsum("sab,sb->sa", M, Y)
         Qm = np.where(allow, Q, -1e9)
         Vn = Qm.max(1)
         d = float(np.abs(Vn - V).max())

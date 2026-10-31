@@ -22,6 +22,9 @@
 
   let ai = new E.AI(cfg);
   let qa = 3, qp = 3, round = 0, started = false, over = false;
+  // 回合上限：此前完全没有上限，实测能一路平到 40 回合。
+  // 到上限后按「剩余气数」判定——气多是硬优势（0~5 气是阈值型价值，见设计文档）。
+  const MAX_ROUNDS = 15;
   let score = { w: 0, l: 0 };
 
   // 主题
@@ -125,6 +128,21 @@
       } else {
         qa = E.nextQi(qa, aiMove); qp = E.nextQi(qp, move); round++;
         log(`第 ${round} 回合 · 你出 <b>${move}</b> · AI 出 <b>${aiMove}</b> · 平局继续`);
+        if (round >= MAX_ROUNDS) {
+          // 上限结算：气多者胜；气数相同判和
+          over = true;
+          const mark = "round";
+          if (qa > qp) {
+            score.l++; $("round").textContent = `AI 获胜（${MAX_ROUNDS} 回合上限，气数 ${qa}:${qp}）`;
+            $("round").className = "round lose"; log(`达到 ${MAX_ROUNDS} 回合上限 · 气数 ${qa}:${qp} · <b>AI胜</b>`);
+          } else if (qa < qp) {
+            score.w++; $("round").textContent = `你赢了！（${MAX_ROUNDS} 回合上限，气数 ${qa}:${qp}）`;
+            $("round").className = "round win"; log(`达到 ${MAX_ROUNDS} 回合上限 · 气数 ${qa}:${qp} · <b>你胜</b>`);
+          } else {
+            $("round").textContent = `和局（${MAX_ROUNDS} 回合上限，气数相同）`;
+            $("round").className = mark; log(`达到 ${MAX_ROUNDS} 回合上限 · 气数相同 · <b>和局</b>`);
+          }
+        }
         render();
       }
     }, 320);

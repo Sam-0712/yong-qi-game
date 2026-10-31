@@ -42,7 +42,11 @@ class PlayerConfig:
     # 抗针对性（见 docs/勇气5.0算法修正-针对性漏洞.md）
     opening: str = "safe"                     # "safe"=开局簿采样 / "off"=BR 决定首招
     opening_book: str = "opening_mode0.json"  # 训练产物；缺失则用内置安全分布
-    robust: float = 0.3                       # 幽灵威胁（理性转化者）权重，按不确定性缩放
+    robust: float = 0.3                       # 幽灵威胁（理性转化者）权重，按样本量衰减但不归零
+    zero_penalty: float = 0.4                 # 归零惩罚：把气打到 0 的续接价值要打折
+    round_total: int = 15                     # 预期对局长度（轮数退火基准）
+    noise0: float = 0.30                      # 起始随机比例（随后递减到 0）
+    urgency: float = 3.0                      # step_cost 在末段的放大倍数
     qi_floor: int = 0                         # 气数下限（0=关）；实测开启会过度保守
     # 冷启动 & 记忆
     prior: str = "none"                       # PRIORS 键
@@ -83,6 +87,9 @@ class CouragePlayer:
             step_cost=self.cfg.step_cost, br_sweeps=self.cfg.br_sweeps,
             persist=self.cfg.persist, prior=PRIORS.get(self.cfg.prior),
             qi_floor=self.cfg.qi_floor, robust=self.cfg.robust,
+            zero_penalty=self.cfg.zero_penalty,
+            round_total=self.cfg.round_total, noise0=self.cfg.noise0,
+            urgency=self.cfg.urgency,
             opening_book=self._opening_book(),
             belief_like=belief_like, rng=random.Random(self.cfg.seed),
         )

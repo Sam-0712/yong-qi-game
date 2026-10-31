@@ -51,21 +51,34 @@
   // 它是「聪明人类」的规则化模型，用来给决策补上"对手会趁我无力时收割"这一威胁。
   function converterPolicy(legalB, legalOwn) {
     if (!legalB.length) return null;
+    // 1. 真必杀：能打穿我方全部合法招 → 用最省的
     const kills = legalB.filter((b) => legalOwn.every((a) => judge(b, a) === 1));
     if (kills.length) {
       const best = kills.reduce((x, y) => (ATTR[x][0] <= ATTR[y][0] ? x : y));
       return { [best]: 1 };
     }
-    const safe = legalB.filter((b) => !legalOwn.some((a) => judge(a, b) === 1));
-    if (!safe.length) {
-      const best = legalB.reduce((x, y) => (ATTR[x][1] >= ATTR[y][1] ? x : y));
-      return { [best]: 1 };
+    // 2. 有正收益 → 同时保留「节流」（最省的能赢招）和「收割」（最强的能赢招）。
+    //    只取期望最高会偏向强招，让幽灵误以为对手会烧光自己的气，
+    //    从而掩盖"我方低气正被低成本蚕食"这一事实。
+    const ev = {};
+    for (const b of legalB) {
+      let sum = 0;
+      for (const a of legalOwn) sum += judge(b, a);
+      ev[b] = legalOwn.length ? sum / legalOwn.length : 0;
     }
-    if (safe.includes("吐气")) return { "吐气": 1 };
-    const best = safe.reduce((x, y) => {
-      const kx = ATTR[x][2] * 10 - ATTR[x][0], ky = ATTR[y][2] * 10 - ATTR[y][0];
-      return kx >= ky ? x : y;
-    });
+    const bestEv = Math.max(...legalB.map((b) => ev[b]));
+    if (bestEv > 1e-9) {
+      const cands = legalB.filter((b) => ev[b] > 1e-9);
+      const cheap = cands.reduce((x, y) =>
+        (ATTR[x][0] - ev[x] <= ATTR[y][0] - ev[y] ? x : y));
+      const strong = cands.reduce((x, y) =>
+        (ev[x] - ATTR[x][0] >= ev[y] - ATTR[y][0] ? x : y));
+      if (cheap === strong) return { [cheap]: 1 };
+      return { [cheap]: 0.5, [strong]: 0.5 };
+    }
+    // 3. 打不到我们（我方有全能格挡）→ 蓄气最划算
+    if (legalB.includes("吐气")) return { "吐气": 1 };
+    const best = legalB.reduce((x, y) => (ATTR[x][2] >= ATTR[y][2] ? x : y));
     return { [best]: 1 };
   }
 
@@ -312,6 +325,7 @@
         mode: 0, gamma: 0.95, stepCost: 0.03, brSweeps: 80,
         tau: 1.0, floor: 0.0, difficulty: 1.0, style: "balanced", noise: 0.0,
         prior: "none", seed: 12345, robust: 0.3, opening: true, belief: "auto",
+        roundTotal: 15, noise0: 0.30, urgency: 3.0, zeroPenalty: 0.4,
       }, cfg);
       const enc = (typeof globalThis !== "undefined" && globalThis.CourageEncoder) || null;
       const wantGru = this.cfg.belief === "gru"
@@ -332,10 +346,14 @@
 
     _oppTable() {
       const mode = this.cfg.mode, table = [];
-      // 幽灵威胁权重：越看不清对手越大；看清了(volatility 低)就放开剥削
+      // 幽灵威胁权重：按观测样本量衰减，但**永不归零**。
+      // 旧版用 (1-maxCat) 调制，等价于"看得越清越不设防"——对手只要先演几手
+      // 温顺牌，AI 就把"它会兑现优势"这个假设整个丢掉，随即被反杀。
       let beta = 0;
       if (this.cfg.robust > 0) {
-        beta = this.cfg.robust * Math.max(0, 1 - this._maxCat());
+        const n = this.belief.steps || 0;
+        const conf = n / (n + 6);           // 0 → 0; 6 步 → 0.5; 60 步 → 0.91
+        beta = this.cfg.robust * (1 - 0.75 * conf);
       }
       for (let qa = 0; qa <= 5; qa++) for (let qp = 0; qp <= 5; qp++) {
         const legalB = validMoves(qp, mode);
@@ -369,6 +387,19 @@
       return 1 / 6;
     }
 
+    // 轮数退火：前几轮多随机（避免双方早早同步成镜像循环），末段收敛执行策略；
+    // 同时每回合成本随进度上升（越拖越亏，逼出破局手）。
+    _roundDyn() {
+      const r = this.belief.steps || 0;
+      const total = Math.max(1, this.cfg.roundTotal || 15);
+      const p = Math.min(1, Math.max(0, r / (total - 1)));
+      return {
+        noise: (this.cfg.noise0 || 0) * (1 - p),
+        step: this.cfg.stepCost * (1 + (this.cfg.urgency || 0) * p),
+        progress: p,
+      };
+    }
+
     _openingMove(legal) {
       const table = OPENING_BY_STYLE[this.cfg.style] || OPENING_BY_STYLE.balanced;
       const p = {};
@@ -379,8 +410,9 @@
       return last;
     }
 
-    _solveBR(table) {
-      const mode = this.cfg.mode, g = this.cfg.gamma, sc = this.cfg.stepCost;
+    _solveBR(table, stepCost) {
+      const mode = this.cfg.mode, g = this.cfg.gamma;
+      const sc = (stepCost === undefined ? this.cfg.stepCost : stepCost);
       const V = new Float64Array(36);
       const validA = [], validB = [];
       for (let qa = 0; qa <= 5; qa++) for (let qp = 0; qp <= 5; qp++) {
@@ -394,11 +426,19 @@
           const A = validA[si], opp = table[si];
           let best = -1e9;
           for (const a of A) {
+            const na = nextQi(qa, a);
+            // 归零惩罚：把气打到 0 之后的续接价值要打折。
+            // 0 气没有任何攻击招，只能等对手犯错才能爬回来；而单边对手模型
+            // 无法表达"我出防御他就换破防招"，于是 V(0,·) 会被系统性高估
+            // （Python 侧实测 +0.69，真实对局里翻盘几乎为 0），导致 AI 敢在第一手
+            // 就把 3 气打光（雷切）然后被蓄气套路收割。这一项只影响续接分支，
+            // "本回合直接获胜"不受影响。
+            const zp = (this.cfg.zeroPenalty > 0 && na === 0) ? this.cfg.zeroPenalty : 0;
             let q = 0;
             for (const b of validB[si]) {
               const pb = opp[b] || 0; if (!pb) continue;
               const w = judge(a, b);
-              q += pb * (w !== 0 ? w : g * V[SID(nextQi(qa, a), nextQi(qp, b))] - sc);
+              q += pb * (w !== 0 ? w : g * V[SID(na, nextQi(qp, b))] - sc - zp);
             }
             if (q > best) best = q;
           }
@@ -438,8 +478,9 @@
       if (this.cfg.opening && this.belief.steps === 0 && qa === start && qp === start) {
         return this._openingMove(legal0);
       }
+      const dyn = this._roundDyn();
       const table = this._oppTable();
-      const V = this._solveBR(table);
+      const V = this._solveBR(table, dyn.step);
       let dist = this._policy(qa, qp, V, table);
 
       // 风格偏置
@@ -455,8 +496,8 @@
       for (const m of legal) { q[m] = d * (p[m] || 0) + (1 - d) * u; t += q[m]; }
       for (const m of legal) q[m] /= t;
 
-      // 噪声（再叠均匀）
-      const nz = Math.min(1, Math.max(0, this.cfg.noise));
+      // 噪声（再叠均匀）：取「档位噪声」与「轮数退火噪声」的较大者
+      const nz = Math.min(1, Math.max(0, Math.max(this.cfg.noise, dyn.noise)));
       if (nz > 0) {
         let u2 = 1 / legal.length, r = {}, t2 = 0;
         for (const m of legal) { r[m] = (1 - nz) * q[m] + nz * u2; t2 += r[m]; }

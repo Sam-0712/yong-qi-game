@@ -25,23 +25,51 @@ from typing import Dict, List, Optional
 from ..core.rules import MOVES_ATTR, judge
 
 
+def _expectation(b: str, own_legal: List[str]) -> float:
+    """假设我方均匀出招时，对手出 b 的平均收益（+1 胜 / 0 平 / -1 负）。"""
+    if not own_legal:
+        return 0.0
+    return sum(judge(b, a) for a in own_legal) / len(own_legal)
+
+
 def converter_policy(opp_legal: List[str], own_legal: List[str]) -> Dict[str, float]:
-    """理性转化者在我方合法招为 own_legal 时的出招分布。"""
+    """「会兑现优势」的对手模型。
+
+    旧版要求"一招能赢过我方**全部**合法招"才算必杀，在低气局面会误判：
+      (我方 0 气, 对手 4 气) 时，螺旋环能打穿吐气/防御，但打不穿「跳」
+      （跳只输给雷切/咏春）。于是旧版认为"无必杀"→ 去蓄气了，
+      完全掩盖了"我方 0 气正在被收割"的事实，导致 V(0,·) 被系统性高估。
+
+    新版按**平均收益**排序：只要这一手能稳定打到我们（EV>0），就出它。
+    这才是"对手会利用我的弱点"的正确刻画。
+    """
     if not opp_legal:
         return {}
+    # 1. 真必杀（打穿全部）——最省气的那一手
     kills = [b for b in opp_legal if all(judge(b, a) == 1 for a in own_legal)]
     if kills:
         best = min(kills, key=lambda m: MOVES_ATTR[m][0])
         return {best: 1.0}
-    safe = [b for b in opp_legal
-            if not any(judge(a, b) == 1 for a in own_legal)]
-    if not safe:
-        best = max(opp_legal, key=lambda m: MOVES_ATTR[m][1])
-        return {best: 1.0}
-    if "吐气" in safe:
+
+    # 2. 能拿到正收益 → 同时保留两种"会兑现优势"的姿态：
+    #    最省的一手（节流型：馒头/双馒，只花 1~2 气就能打穿低防招）与
+    #    最强的一手（收割型：雷切/螺旋环，一口气打穿高防）。
+    #    只取"期望最高"会偏向强招，于是幽灵以为对手会烧光自己的气，
+    #    反而掩盖了"低气正在被低成本蚕食"的事实（实测：AI 因此在吐气上
+    #    反复送死，被人用馒头打死 38/43 局）。
+    evs = {b: _expectation(b, own_legal) for b in opp_legal}
+    if max(evs.values()) > 1e-9:
+        cands = [b for b in opp_legal if evs[b] > 1e-9]
+        cheap = min(cands, key=lambda m: (MOVES_ATTR[m][0], -evs[m]))
+        strong = max(cands, key=lambda m: (evs[m], -MOVES_ATTR[m][0]))
+        if cheap == strong:
+            return {cheap: 1.0}
+        return {cheap: 0.5, strong: 0.5}
+
+    # 3. 打不到我们（我方有全能格挡）→ 蓄气最划算，其次高防低耗
+    if "吐气" in opp_legal:
         return {"吐气": 1.0}
-    # 同为安全招时选「高防 + 低耗」：防御 > 雷切（雷切白花 3 气，且不增加安全）
-    best = max(safe, key=lambda m: (MOVES_ATTR[m][2], -MOVES_ATTR[m][0]))
+    best = max(opp_legal, key=lambda m: (MOVES_ATTR[m][2], -MOVES_ATTR[m][0]))
     return {best: 1.0}
 
 
