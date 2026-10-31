@@ -19,3 +19,14 @@ venv/
 # 构建产物
 dist/
 build/
+
+# 本地状态同步（跨机共享，不入 git）
+/docs/
+
+# 生成产物（策略表/模型权重，按需生成）
+data/artifacts/
+
+# 缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

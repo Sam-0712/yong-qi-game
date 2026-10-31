@@ -5,9 +5,9 @@
 import sys, os, random
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.game import get_valid_moves, transition, judge, MOVES_ATTR, cfr_lookup
-from src.adaptive import CombinedAdaptive, AdaptiveLayer, WithinGameAdaptive
-from src.db import load_strategy
+from courage.core.rules import get_valid_moves, transition, judge, MOVES_ATTR, cfr_lookup
+from courage.policy.adaptive import CombinedAdaptive, AdaptiveLayer, WithinGameAdaptive
+from courage.storage.sqlite_store import load_strategy
 
 # 加载策略
 CFR = load_strategy(mode=0)

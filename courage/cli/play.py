@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-
+"""命令行对局（旧版算法，B/C 重构期间的过渡入口）。"""
 
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from src.game import get_valid_moves, transition, judge, decode_state, IDX_TO_MOVE, MOVES, cfr_lookup
-from src.adaptive import CombinedAdaptive
-from src.personality import get_personality, apply_bias, PRESETS
-from src.db import (
+from courage.core.rules import get_valid_moves, transition, judge, decode_state, IDX_TO_MOVE, MOVES, cfr_lookup
+from courage.policy.adaptive import CombinedAdaptive
+from courage.policy.personality import get_personality, apply_bias, PRESETS
+from courage.storage.sqlite_store import (
     load_strategy, has_strategy, save_observations, save_global_stats,
     load_observations, load_global_stats, create_session, update_session,
 )

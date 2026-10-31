@@ -1,5 +1,9 @@
 """
-核心游戏引擎
+核心游戏规则（纯函数，无状态）。
+
+从 src/game.py 迁移。相对旧版的唯一语义修正：
+  合法招式按「模式」过滤——mode=0 不含「无气拨」，mode=1 才含。
+旧实现无条件把「无气拨」(cost=0) 视为合法，导致标准模式训练被污染。
 """
 
 from typing import Tuple, List, Dict, Union
@@ -50,9 +54,18 @@ def hash_to_state(h: int) -> State:
             (h >> 10) & 0xF, (h >> 6) & 0xF, h & 0x3F)
 
 
-def get_valid_moves(qi: int, last_move_idx: int) -> List[str]:
+def get_valid_moves(qi: int, last_move_idx: int = 0, *, mode: int = 0) -> List[str]:
+    """当前气数下的合法招式。
+
+    mode=0：标准模式，不含「无气拨」。
+    mode=1：无气拨模式，含「无气拨」。
+
+    注：last_move_idx 仅为兼容旧签名保留，规则上不使用（无记忆）。
+    """
     valid = []
     for name, attr in MOVES_ATTR.items():
+        if name == "无气拨" and mode == 0:
+            continue
         if attr[0] <= qi:
             valid.append(name)
     return valid
@@ -140,8 +153,8 @@ def cfr_lookup(cfr_dict: dict, state: State) -> dict:
 
 # ── 状态图构建 ──
 
-def build_state_graph(start_qi_ai: int = 3, start_qi_pl: int = 3):
-    """BFS 构建所有可达状态的有向图。"""
+def build_state_graph(start_qi_ai: int = 3, start_qi_pl: int = 3, *, mode: int = 0):
+    """BFS 构建所有可达状态的有向图（按模式过滤合法招式）。"""
     start = (start_qi_ai, start_qi_pl, 0, 0, 0)
     graph, queue, visited = {}, [start], {start}
 
@@ -153,7 +166,8 @@ def build_state_graph(start_qi_ai: int = 3, start_qi_pl: int = 3):
                          'transitions': {}, 'terminal_value': 0}
             continue
 
-        va, vb = get_valid_moves(qi_a, la), get_valid_moves(qi_p, lp)
+        va = get_valid_moves(qi_a, la, mode=mode)
+        vb = get_valid_moves(qi_p, lp, mode=mode)
         trans = {}
         for ma in va:
             for mb in vb:

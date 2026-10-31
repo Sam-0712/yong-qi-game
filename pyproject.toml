@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "courage"
+version = "0.2.0"
+description = "《勇气》—— 博弈算法与工程实现（B+C 重构）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",   # 仅 learning 层使用
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+courage-play = "courage.cli.play:main"
+
+[tool.setuptools.packages.find]
+include = ["courage*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

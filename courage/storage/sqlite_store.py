@@ -1,17 +1,17 @@
 """
-勇气 — SQLite 数据层 (哈希/整数化)
-========================================
-- 状态: 20 位整数哈希
-- 招式: MOVE_TO_IDX 整数
-- 概率: ROUND(.., 8)
+SQLite 数据层（旧版 5 元组状态哈希存储）。
+
+从 src/db.py 迁移。B/C 重构后由 storage/artifacts.py 的紧凑产物取代，
+此处暂时保留以支撑旧 CLI 与历史数据。
 """
 
 import sqlite3, os
 from typing import Dict, Optional
 from collections import defaultdict
-from .game import MOVE_TO_IDX, IDX_TO_MOVE, state_hash, hash_to_state
+from ..core.rules import MOVE_TO_IDX, IDX_TO_MOVE, state_hash, hash_to_state
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'courage.db')
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.path.join(_ROOT, 'data', 'courage.db')
 
 
 def _conn():

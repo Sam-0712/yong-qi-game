@@ -5,7 +5,7 @@
 import math
 from typing import Dict, List
 from collections import defaultdict
-from .game import judge, get_valid_moves
+from ..core.rules import judge, get_valid_moves
 
 
 class AdaptiveLayer:

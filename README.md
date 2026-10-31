@@ -6,6 +6,9 @@
 >
 > 算法仍在快速迭代中，未来的整体架构可能会随时发生变化。
 
+> **重构中（B + C）**：目录已规范为 `courage/` 包（core / solvers / policy / learning / bots / storage / cli）+ `tools/`；
+> 旧的 `src/`、`launcher.py`、PyQt GUI 已迁移或归档到 `attic/`。下方「代码」章节的结构与用法为旧版，待更新。
+
 ## 游戏形式化
 
 ### 状态空间
@@ -250,15 +253,18 @@ $$
 ## 使用方式
 
 ```bash
-# 1. 训练策略（首次使用必须运行）
-python -m tests.validate
+pip install -e .        # 生产依赖仅 numpy（learning 层）
 
-# 2. 启动人机对战
-python launcher.py
+# 状态空间规模（验证抽象与压缩）
+python -m tools.train states
 
-# 3. 自对抗性能测试
-python -m tests.selfplay_test
+# 训练并评估小型对手模型（C 的最小闭环）
+python -m tools.train opponent --bot aggressive --save --verbose
+python -m tools.eval   opponent --bot aggressive
+
+# 旧版命令行对局（过渡入口，使用旧 CFR + SQLite）
+python -m courage.cli.play
 ```
 
-**依赖**：Python 3.8+，标准库（无需第三方包）。
+**依赖**：Python 3.10+；第三方仅 `numpy`（learning 层）。
 

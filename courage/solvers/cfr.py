@@ -7,7 +7,7 @@ Tabular CFR/DCFR，按回合逆序遍历 DAG，数值索引加速。
 import time
 from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass
-from .game import (
+from ..core.rules import (
     build_state_graph, state_summary, decode_state,
     State, MOVES, MOVES_ATTR, MOVE_TO_IDX, IDX_TO_MOVE,
     MAX_QI, MAX_ROUNDS,

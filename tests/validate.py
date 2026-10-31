@@ -4,9 +4,9 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.cfr import CFRTrainer
-from src.db import save_strategy
-from src.game import get_valid_moves, decode_state
+from courage.solvers.cfr import CFRTrainer
+from courage.storage.sqlite_store import save_strategy
+from courage.core.rules import get_valid_moves, decode_state
 
 
 print("=" * 56)
