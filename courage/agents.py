@@ -92,14 +92,17 @@ class OnlineBRAgent:
 
     def __init__(self, settings: Optional[PlaySettings] = None,
                  mode: int = MODE_STANDARD, gamma: float = 0.95,
-                 decay: float = 0.85, br_sweeps: int = 300,
+                 decay: float = 0.85, alpha: float = 0.20, smooth: float = 0.05,
+                 step_cost: float = 0.03, br_sweeps: int = 600, persist: bool = False,
                  rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
         self.gamma = gamma
+        self.step_cost = step_cost
         self.br_sweeps = br_sweeps
         self.rng = rng or random.Random()
-        self.belief = BeliefTracker(decay=decay)
+        self.persist = persist
+        self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth)
         self.T = build_tables(mode)
         self._all = [(qa, qp) for qa in range(QI_MAX + 1) for qp in range(QI_MAX + 1)]
         self._last_br = None
@@ -114,7 +117,8 @@ class OnlineBRAgent:
     def act(self, own, opp):
         opp_pol = self._opp_policy_from_belief()
         br = solve_best_response(self.mode, opp_pol, gamma=self.gamma,
-                                 max_sweeps=self.br_sweeps, tol=1e-4, tables=self.T)
+                                 max_sweeps=self.br_sweeps, tol=1e-5,
+                                 step_cost=self.step_cost, tables=self.T)
         legal = get_valid_moves(own, mode=self.mode)
         base = br.policy.get((own, opp)) or {m: 1.0 / len(legal) for m in legal}
         return sample_policy(apply_settings(base, legal, self.settings), self.rng)
@@ -123,7 +127,9 @@ class OnlineBRAgent:
         self.belief.observe(own_move, opp_move)
 
     def reset(self):
-        self.belief.reset()
+        # 跨局记忆：persist=True 时保留信念，仅每局由上层决定是否清零
+        if not self.persist:
+            self.belief.reset()
 
 
 def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,

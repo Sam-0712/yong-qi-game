@@ -48,7 +48,8 @@ def run_all(args):
     for name in bots_by_name:
         opp1 = BotAgent(bots_by_name[name])
         online = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
-                               br_sweeps=args.br_sweeps)
+                               alpha=args.alpha, smooth=args.smooth,
+                               step_cost=args.step_cost, br_sweeps=args.br_sweeps)
         r_on = run_duel(online, opp1, args.mode, games=args.games, cap=args.cap)
 
         opp2 = BotAgent(bots_by_name[name])
@@ -64,7 +65,8 @@ def run_switch(args):
 
     for label, ai in [
         ("在线信念-BR", OnlineBRAgent(PlaySettings(), mode, decay=args.decay,
-                                   br_sweeps=args.br_sweeps)),
+                                   alpha=args.alpha, smooth=args.smooth,
+                                   step_cost=args.step_cost, br_sweeps=args.br_sweeps)),
         ("固定均衡", TableAgent(policy_eq, PlaySettings(), mode) if policy_eq else None),
     ]:
         if ai is None:
@@ -104,6 +106,10 @@ def main() -> None:
     ap.add_argument("--games", type=int, default=150)
     ap.add_argument("--cap", type=int, default=200)
     ap.add_argument("--decay", type=float, default=0.85)
+    ap.add_argument("--alpha", type=float, default=0.20, help="Dirichlet 平滑伪计数")
+    ap.add_argument("--smooth", type=float, default=0.05, help="对手分布与均匀混合比例")
+    ap.add_argument("--step-cost", dest="step_cost", type=float, default=0.03,
+                    help="每回合成本，惩罚无限平局")
     ap.add_argument("--br-sweeps", dest="br_sweeps", type=int, default=300)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()

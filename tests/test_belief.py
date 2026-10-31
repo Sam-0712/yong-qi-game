@@ -14,7 +14,7 @@ from courage.learning.belief import BeliefTracker
 
 
 def _feed(moves, own="馒头", decay=0.7):
-    tr = BeliefTracker(decay=decay)
+    tr = BeliefTracker(decay=decay, alpha=0.05, smooth=0.0)
     for m in moves:
         tr.observe(own, m)
     return tr

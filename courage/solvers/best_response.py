@@ -47,7 +47,9 @@ def _opp_matrix(T: Tables, opp_policy: Dict[Tuple[int, int], Dict[str, float]]
 def solve_best_response(mode: int,
                         opp_policy: Dict[Tuple[int, int], Dict[str, float]],
                         gamma: float = 0.95, max_sweeps: int = 2000,
-                        tol: float = 1e-7, tables: Tables | None = None) -> BRResult:
+                        tol: float = 1e-7, step_cost: float = 0.0,
+                        tables: Tables | None = None) -> BRResult:
+    """单边最佳响应。step_cost>0 时每回合扣 c，惩罚无限平局、鼓励主动破局。"""
     T = tables if tables is not None else build_tables(mode)
     S = len(T.states)
     Y = _opp_matrix(T, opp_policy)
@@ -57,7 +59,7 @@ def solve_best_response(mode: int,
     sweeps = 0
     for sw in range(1, max_sweeps + 1):
         sweeps = sw
-        M = np.where(T.term, T.pay, gamma * V[T.succ])
+        M = np.where(T.term, T.pay, gamma * V[T.succ] - step_cost)
         Q = np.einsum("sab,sb->sa", M, Y)
         Qm = np.where(T.maskA > 0, Q, -1e9)
         Vn = Qm.max(1)

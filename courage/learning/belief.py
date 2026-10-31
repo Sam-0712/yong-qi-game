@@ -30,10 +30,14 @@ CATS = ["attack", "defense", "dodge", "exhale", "noqi"]
 
 class BeliefTracker:
     def __init__(self, decay: float = 0.85, short_decay: float = 0.5,
-                 max_run: int = 6):
+                 max_run: int = 6, alpha: float = 0.25, smooth: float = 0.05):
+        # alpha  : 每类动作的 Dirichlet 伪计数（越大越平滑、越不轻易下结论）
+        # smooth : 最终对手分布与均匀分布的混合比例（防止过度自信）
         self.d = decay
         self.ds = short_decay
         self.max_run = max_run
+        self.alpha = alpha
+        self.smooth = smooth
         self._reset_stats()
         self.last_own: Optional[str] = None
         self.last_opp: Optional[str] = None
@@ -94,9 +98,12 @@ class BeliefTracker:
 
     # ── 因子读出 ──
     def _props(self) -> Tuple[Dict[str, float], Dict[str, float]]:
-        lp = {c: (self.long[c] / self.long_tot if self.long_tot > 1e-9 else 0.0)
+        K = len(CATS)
+        den_l = self.long_tot + self.alpha * K
+        den_s = self.short_tot + self.alpha * K
+        lp = {c: ((self.long[c] + self.alpha) / den_l if den_l > 1e-9 else 1.0 / K)
               for c in CATS}
-        sp = {c: (self.short[c] / self.short_tot if self.short_tot > 1e-9 else 0.0)
+        sp = {c: ((self.short[c] + self.alpha) / den_s if den_s > 1e-9 else 1.0 / K)
               for c in CATS}
         return lp, sp
 
@@ -135,7 +142,12 @@ class BeliefTracker:
         if last_own is not None and f["mirror"] > 0.3 and last_own in w:
             w[last_own] += f["mirror"]
         s = sum(w.values())
-        return {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
+        w = {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
+        # 与均匀混合，避免对噪声人类过度自信
+        if self.smooth > 0:
+            u = 1.0 / len(legal)
+            w = {m: (1.0 - self.smooth) * w[m] + self.smooth * u for m in legal}
+        return w
 
     # ── 「风格」只是对因子的解读（可选、纯展示，不参与决策）──
     @staticmethod
