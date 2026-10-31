@@ -85,6 +85,7 @@ def _sigmoid(x):
 class CNNEncoder:
     def __init__(self, window: int = 4, hidden: int = 64, seed: int = 0, lr: float = 0.01):
         rng = np.random.default_rng(seed)
+        self.arch = "cnn"
         self.window, self.hidden, self.lr = window, hidden, lr
         self.params = {
             "W1": rng.normal(0, 0.1, (hidden, window * D_IN)),
@@ -109,16 +110,16 @@ class CNNEncoder:
         yhat = _sigmoid(h @ p["W2"].T + p["b2"])
         return h, yhat
 
-    def fit_step(self, W, Y):
+    def fit_step(self, W, Y, weight: float = 1.0):
         p = self.params
         h, yhat = self.forward(W)
-        diff = (yhat - Y) / len(Y)
+        diff = (yhat - Y) / len(Y) * weight
         g = {"W2": diff.T @ h, "b2": diff.sum(0)}
         dh = (diff @ p["W2"]) * (h > 0)
         g["W1"] = dh.T @ W
         g["b1"] = dh.sum(0)
         self.opt.step(p, g)
-        return float(((yhat - Y) ** 2).mean())
+        return float((((yhat - Y) ** 2).mean()) * weight)
 
     def predict_seq(self, X):
         W, _ = self._windows(X)
@@ -133,6 +134,7 @@ class CNNEncoder:
 class GRUEncoder:
     def __init__(self, hidden: int = 24, seed: int = 0, lr: float = 0.01):
         rng = np.random.default_rng(seed)
+        self.arch = "gru"
         self.H, self.lr = hidden, lr
 
         def nz(*s):
@@ -160,11 +162,11 @@ class GRUEncoder:
         yhat = _sigmoid(hs[1:] @ p["Wo"].T + p["bo"])
         return hs, zs, rs, ns, yhat
 
-    def fit_step(self, X, Y):
+    def fit_step(self, X, Y, weight: float = 1.0):
         p, H = self.params, self.H
         hs, zs, rs, ns, yhat = self.forward(X)
         T = X.shape[0]
-        diff = (yhat - Y) / T
+        diff = (yhat - Y) / T * weight
         g = {k: np.zeros_like(v) for k, v in p.items()}
         g["Wo"] = diff.T @ hs[1:]; g["bo"] = diff.sum(0)
         dh_next = np.zeros(H)
