@@ -13,6 +13,7 @@ MOVES: List[str] = [
     "咏春",
     "防御",
     "跳",
+    "无气拨",
 ]
 
 MOVES_ATTR: Dict[str, List[int]] = {
@@ -24,6 +25,7 @@ MOVES_ATTR: Dict[str, List[int]] = {
     "咏春":   [5, 5, 5],
     "防御":   [0, 0, 3],
     "跳":     [0, 0, 0],
+    "无气拨": [0, 0, 0],  # 仅在无气拨模式可用，攻击/防御均为0.5（特殊处理）
 }
 
 HIT_JUMP: set = {"雷切", "咏春"}
@@ -58,6 +60,26 @@ def get_valid_moves(qi: int, last_move_idx: int) -> List[str]:
 
 def judge(m1: str, m2: str) -> int:
     a1, a2 = MOVES_ATTR[m1], MOVES_ATTR[m2]
+
+    # 特殊处理：无气拨
+    # 无气拨攻击/防御均为0.5，特殊规则：
+    #   赢：吐气
+    #   平：防御、跳、无气拨
+    #   输：馒头、双馒、雷切、螺旋环、咏春、反弹
+    if m1 == "无气拨":
+        if m2 == "吐气":
+            return 1   # 无气拨赢吐气
+        elif m2 in ("防御", "跳", "无气拨"):
+            return 0   # 平局
+        else:
+            return -1  # 输给攻击招式
+    if m2 == "无气拨":
+        if m1 == "吐气":
+            return -1  # 吐气输给无气拨
+        elif m1 in ("防御", "跳"):
+            return 0   # 平局
+        else:
+            return 1   # 攻击招式赢无气拨
 
     win1 = False
     if a1[1] > 0:

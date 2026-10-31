@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# 日志
+*.log
+
+# WorkBuddy 助手工作区
+.workbuddy/
+
+# IDE
+.vscode/
+.idea/
+
+# 构建产物
+dist/
+build/
