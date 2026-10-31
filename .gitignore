@@ -36,3 +36,7 @@ data/belief.db
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# 实验产物 / 归档（一律不入库，本地保留）
+/data/
+/attic/

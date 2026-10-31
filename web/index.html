@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>勇气 5.0 · 对局</title>
+  <meta name="description" content="勇气 5.0：序列编码器 → 信念因子 → 校准 → 解析最佳响应。纯前端运行。">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">勇</span>
+        <div>
+          <h1>勇气 <em>5.0</em></h1>
+          <p>序列编码器 · 信念因子 · 校准 · 解析最佳响应</p>
+        </div>
+      </div>
+      <button id="themeBtn" class="ghost" aria-label="切换深浅主题" title="切换主题">◐</button>
+    </header>
+
+    <main class="arena">
+      <section class="panel ai">
+        <div class="who"><span class="dot ai-dot"></span> AI <span id="aiStyle" class="tag">平衡型</span></div>
+        <div class="qi" id="aiQi"></div>
+        <div class="move" id="aiMove">—</div>
+      </section>
+      <div class="vs">VS</div>
+      <section class="panel me">
+        <div class="who"><span class="dot me-dot"></span> 你</div>
+        <div class="qi" id="plQi"></div>
+        <div class="move" id="plMove">—</div>
+      </section>
+    </main>
+
+    <div class="statusbar">
+      <div id="round" class="round">点击「开始对局」</div>
+      <div id="score" class="score">胜 0 · 负 0</div>
+    </div>
+
+    <section class="controls">
+      <button id="startBtn" class="primary">开始对局</button>
+      <label>难度 <input id="diff" type="range" min="0" max="1" step="0.1" value="1"></label>
+      <label>风格
+        <select id="style">
+          <option value="balanced">平衡</option>
+          <option value="aggressive">进攻</option>
+          <option value="defensive">防守</option>
+          <option value="gambler">赌徒</option>
+          <option value="thinker">深思</option>
+        </select>
+      </label>
+      <label>模式
+        <select id="mode">
+          <option value="0">标准</option>
+          <option value="1">无气拨</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="moves" id="moveGrid"></section>
+
+    <section class="log" id="log"></section>
+
+    <footer class="foot">勇气 5.0 · 序列→因子→校准→解析BR · 纯前端运行（手写信念）</footer>
+  </div>
+
+  <script src="engine.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
