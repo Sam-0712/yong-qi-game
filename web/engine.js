@@ -35,6 +35,32 @@
     heavy: { attack: 2, heavy: 5, defense: 2, dodge: 0.5, exhale: 1, noqi: 0 },
   };
 
+  // 安全开局分布：3 气时没有任何招能击穿「防御」(def3)，所以「防御」本回合不可输；
+  // 其余质量只提供随机性（避免被固定套路针对）。
+  const SAFE_OPENING = { "防御": 0.70, "双馒": 0.13, "雷切": 0.08, "吐气": 0.06, "馒头": 0.02, "跳": 0.01, "无气拨": 0.05 };
+
+  // 理性转化者：能必杀就必杀；否则能安全蓄气就蓄气；否则挑高防低耗。
+  // 它是「聪明人类」的规则化模型，用来给决策补上"对手会趁我无力时收割"这一威胁。
+  function converterPolicy(legalB, legalOwn) {
+    if (!legalB.length) return null;
+    const kills = legalB.filter((b) => legalOwn.every((a) => judge(b, a) === 1));
+    if (kills.length) {
+      const best = kills.reduce((x, y) => (ATTR[x][0] <= ATTR[y][0] ? x : y));
+      return { [best]: 1 };
+    }
+    const safe = legalB.filter((b) => !legalOwn.some((a) => judge(a, b) === 1));
+    if (!safe.length) {
+      const best = legalB.reduce((x, y) => (ATTR[x][1] >= ATTR[y][1] ? x : y));
+      return { [best]: 1 };
+    }
+    if (safe.includes("吐气")) return { "吐气": 1 };
+    const best = safe.reduce((x, y) => {
+      const kx = ATTR[x][2] * 10 - ATTR[x][0], ky = ATTR[y][2] * 10 - ATTR[y][0];
+      return kx >= ky ? x : y;
+    });
+    return { [best]: 1 };
+  }
+
   function judge(m1, m2) {
     const a1 = ATTR[m1], a2 = ATTR[m2];
     if (m1 === "无气拨") {
@@ -91,6 +117,7 @@
     reset() {
       this.long = {}; this.short = {}; CATS.forEach(c => { this.long[c] = 0; this.short[c] = 0; });
       this.longTot = 0; this.shortTot = 0; this.run = 0; this.mirror = 0; this.mirrorTot = 0;
+      this.steps = 0;
       if (this.prior) {
         const s = Object.values(this.prior).reduce((a, b) => a + Math.max(b, 0), 0) || 1;
         CATS.forEach(c => {
@@ -111,6 +138,7 @@
       this.mirrorTot = this.mirrorTot * this.d + 1;
       this.mirror *= this.d;
       if (own != null && own === opp) this.mirror += 1;
+      this.steps += 1;
     }
     _props() {
       const K = CATS.length, dl = this.longTot + this.alpha * K, ds = this.shortTot + this.alpha * K;
@@ -158,7 +186,7 @@
       this.cfg = Object.assign({
         mode: 0, gamma: 0.95, stepCost: 0.03, brSweeps: 80,
         tau: 1.0, floor: 0.0, difficulty: 1.0, style: "balanced", noise: 0.0,
-        prior: "none", seed: 12345,
+        prior: "none", seed: 12345, robust: 0.3, opening: true,
       }, cfg);
       this.belief = new Belief({ prior: PRIORS[this.cfg.prior] });
       this.seed = this.cfg.seed >>> 0;
@@ -173,11 +201,38 @@
 
     _oppTable() {
       const mode = this.cfg.mode, table = [];
+      // 幽灵威胁权重：越看不清对手越大；看清了(volatility 低)就放开剥削
+      let beta = 0;
+      if (this.cfg.robust > 0) {
+        const [lp] = this.belief._props();
+        const maxp = Math.max(...CATS.map((c) => lp[c]));
+        beta = this.cfg.robust * Math.max(0, 1 - maxp);
+      }
       for (let qa = 0; qa <= 5; qa++) for (let qp = 0; qp <= 5; qp++) {
-        const legal = validMoves(qp, mode);
-        table[SID(qa, qp)] = this.belief.oppWeights(legal, this.lastOwn, this.cfg.tau, this.cfg.floor);
+        const legalB = validMoves(qp, mode);
+        let w = this.belief.oppWeights(legalB, this.lastOwn, this.cfg.tau, this.cfg.floor);
+        if (beta > 0) {
+          const conv = converterPolicy(legalB, validMoves(qa, mode));
+          if (conv) {
+            const mixed = {};
+            for (const m of legalB) mixed[m] = (1 - beta) * (w[m] || 0) + beta * (conv[m] || 0);
+            const s = legalB.reduce((t, m) => t + mixed[m], 0);
+            if (s > 1e-12) for (const m of legalB) mixed[m] /= s;
+            w = mixed;
+          }
+        }
+        table[SID(qa, qp)] = w;
       }
       return table;
+    }
+
+    _openingMove(legal) {
+      const p = {};
+      let s = 0;
+      for (const m of legal) { p[m] = SAFE_OPENING[m] || 0.02; s += p[m]; }
+      let r = this._rnd() * s, acc = 0, last = legal[legal.length - 1];
+      for (const m of legal) { last = m; acc += p[m]; if (r <= acc) return m; }
+      return last;
     }
 
     _solveBR(table) {
@@ -231,6 +286,11 @@
     }
 
     act(qa, qp) {
+      const legal0 = validMoves(qa, this.cfg.mode);
+      // 首招：按安全开局分布采样（随机、各招可达、不可被固定套路针对）
+      if (this.cfg.opening && this.belief.steps === 0) {
+        return this._openingMove(legal0);
+      }
       const table = this._oppTable();
       const V = this._solveBR(table);
       let dist = this._policy(qa, qp, V, table);

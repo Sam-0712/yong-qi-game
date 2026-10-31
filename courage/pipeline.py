@@ -39,6 +39,11 @@ class PlayerConfig:
     difficulty: float = 1.0
     style: str = "balanced"
     noise: float = 0.0
+    # 抗针对性（见 docs/勇气5.0算法修正-针对性漏洞.md）
+    opening: str = "safe"                     # "safe"=开局簿采样 / "off"=BR 决定首招
+    opening_book: str = "opening_mode0.json"  # 训练产物；缺失则用内置安全分布
+    robust: float = 0.3                       # 幽灵威胁（理性转化者）权重，按不确定性缩放
+    qi_floor: int = 0                         # 气数下限（0=关）；实测开启会过度保守
     # 冷启动 & 记忆
     prior: str = "none"                       # PRIORS 键
     decay: float = 0.85
@@ -77,6 +82,8 @@ class CouragePlayer:
             decay=self.cfg.decay, alpha=self.cfg.alpha, smooth=self.cfg.smooth,
             step_cost=self.cfg.step_cost, br_sweeps=self.cfg.br_sweeps,
             persist=self.cfg.persist, prior=PRIORS.get(self.cfg.prior),
+            qi_floor=self.cfg.qi_floor, robust=self.cfg.robust,
+            opening_book=self._opening_book(),
             belief_like=belief_like, rng=random.Random(self.cfg.seed),
         )
 
@@ -85,6 +92,15 @@ class CouragePlayer:
             bt = load_belief(self.cfg.opp_id)
             if bt is not None:
                 self.agent.belief = bt
+
+    def _opening_book(self):
+        """开局簿：训练产物优先，缺失则内置安全分布；opening='off' 时交给 BR。"""
+        if self.cfg.opening == "off":
+            return None
+        from .core.rules import get_valid_moves
+        from .policy.opening import load_or_safe
+        legal = get_valid_moves(0 if self.cfg.mode == 1 else 3, mode=self.cfg.mode)
+        return load_or_safe(legal, self.cfg.opening_book)
 
     # Agent 接口
     def act(self, own: int, opp: int) -> str:

@@ -21,7 +21,20 @@ from courage.agents import (BotAgent, OnlineBRAgent, ScriptedAgent,
 from courage.bots.scripts import bots_by_name
 from courage.core.rules import MOVES_ATTR, get_valid_moves, judge, next_qi
 from courage.policy.settings import PlaySettings
+from courage.policy.opening import load_or_safe
 from courage.storage.artifacts import load_policy_table
+
+
+def _book(args):
+    """按当前模式加载开局簿（训练产物优先，缺失用内置安全分布）。"""
+    if getattr(args, "opening", "safe") == "off":
+        return None
+    qi = 0 if args.mode == 1 else 3
+    return load_or_safe(get_valid_moves(qi, mode=args.mode))
+
+
+def _robust(args):
+    return float(getattr(args, "robust", 0.3))
 
 
 def _fmt(res) -> str:
@@ -54,7 +67,9 @@ def run_all(args):
         opp1 = BotAgent(bots_by_name[name])
         belief = (EncoderBelief(encoder_model, tau=args.enc_tau, floor=args.enc_floor)
                   if encoder_model is not None else None)
-        online = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
+        online = OnlineBRAgent(PlaySettings(), args.mode,
+                               opening_book=_book(args), robust=_robust(args),
+                               decay=args.decay,
                                alpha=args.alpha, smooth=args.smooth,
                                step_cost=args.step_cost, br_sweeps=args.br_sweeps,
                                prior=PRIORS[args.prior], belief_like=belief)
@@ -72,7 +87,9 @@ def run_switch(args):
     policy_eq, _ = load_policy_table("policy_mode0.json")
 
     for label, ai in [
-        ("在线信念-BR", OnlineBRAgent(PlaySettings(), mode, decay=args.decay,
+        ("在线信念-BR", OnlineBRAgent(PlaySettings(), mode,
+                                   opening_book=_book(args), robust=_robust(args),
+                                   decay=args.decay,
                                    alpha=args.alpha, smooth=args.smooth,
                                    step_cost=args.step_cost, br_sweeps=args.br_sweeps,
                                    prior=PRIORS[args.prior])),
@@ -110,7 +127,9 @@ def run_switch(args):
 def run_memory(args):
     from courage.records import EpisodeRecorder
     from courage.storage.belief_store import load_belief, save_belief
-    ai = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
+    ai = OnlineBRAgent(PlaySettings(), args.mode,
+                       opening_book=_book(args), robust=_robust(args),
+                       decay=args.decay,
                        alpha=args.alpha, smooth=args.smooth,
                        step_cost=args.step_cost, br_sweeps=args.br_sweeps,
                        persist=True, prior=PRIORS[args.prior])
@@ -160,6 +179,10 @@ def main() -> None:
                     help="--memory 的对手")
     ap.add_argument("--record", nargs="?", const="default", default="",
                     help="记录双方序列到 JSONL（省略值则用默认路径）")
+    ap.add_argument("--robust", type=float, default=0.3,
+                    help="幽灵威胁（理性转化者）权重，按不确定性缩放")
+    ap.add_argument("--opening", default="safe", choices=["safe", "off"],
+                    help="首招：safe=开局簿采样 / off=BR 决定")
     ap.add_argument("--prior", default="none", choices=list(PRIORS),
                     help="冷启动先验（none=均匀）")
     ap.add_argument("--encoder-file", dest="encoder_file", default="",
