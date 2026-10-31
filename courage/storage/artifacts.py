@@ -43,3 +43,24 @@ def load_policy(name: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Any]]
     if blob is None:
         return {}, {}
     return blob.get("policy", {}), blob.get("meta", {})
+
+
+# ── 新状态 (qa,qp) 策略表：元组键 ↔ "qa,qp" 字符串 ──
+
+def save_policy_table(name: str,
+                      policy: Dict[Tuple[int, int], Dict[str, float]],
+                      meta: Optional[Dict[str, Any]] = None) -> str:
+    flat = {f"{qa},{qp}": probs for (qa, qp), probs in policy.items()}
+    return save_json(name, {"meta": meta or {}, "policy": flat})
+
+
+def load_policy_table(name: str
+                      ) -> Tuple[Dict[Tuple[int, int], Dict[str, float]], Dict[str, Any]]:
+    blob = load_json(name)
+    if blob is None:
+        return {}, {}
+    pol: Dict[Tuple[int, int], Dict[str, float]] = {}
+    for k, probs in blob.get("policy", {}).items():
+        qa, qp = (int(x) for x in k.split(","))
+        pol[(qa, qp)] = {m: float(p) for m, p in probs.items()}
+    return pol, blob.get("meta", {})

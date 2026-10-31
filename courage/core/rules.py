@@ -117,14 +117,21 @@ def judge(m1: str, m2: str) -> int:
     return 0
 
 
+def next_qi(qi: int, move: str) -> int:
+    """单方气数转移（不含胜负判定）。吐气回 1 气，其余按耗气扣减。"""
+    cost = MOVES_ATTR[move][0]
+    gain = 1 if move == "吐气" else 0
+    return max(0, min(qi - cost + gain, MAX_QI))
+
+
 def transition(state: State, m_ai: str, m_pl: str) -> Outcome:
     qi_ai, qi_pl, last_ai, last_pl, rnd = state
     winner = judge(m_ai, m_pl)
     if winner != 0:
         return ('terminal', winner)
 
-    qa = max(0, min(qi_ai - MOVES_ATTR[m_ai][0] + (1 if m_ai == "吐气" else 0), MAX_QI))
-    qp = max(0, min(qi_pl - MOVES_ATTR[m_pl][0] + (1 if m_pl == "吐气" else 0), MAX_QI))
+    qa = next_qi(qi_ai, m_ai)
+    qp = next_qi(qi_pl, m_pl)
     return (qa, qp, MOVE_TO_IDX[m_ai], MOVE_TO_IDX[m_pl], rnd + 1)
 
 

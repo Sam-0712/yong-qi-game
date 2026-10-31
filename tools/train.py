@@ -84,6 +84,57 @@ def task_opponent(args) -> None:
         print(f"已保存: {out}")
 
 
+def task_equilibrium(args) -> None:
+    import time
+    from courage.solvers.equilibrium import solve_equilibrium
+
+    t0 = time.time()
+    res = solve_equilibrium(mode=args.mode, gamma=args.gamma, iters=args.inner,
+                            max_sweeps=args.sweeps, tol=args.tol, verbose=args.verbose)
+    dt = time.time() - t0
+    print(f"均衡: mode={args.mode} γ={args.gamma} sweeps={res.meta['sweeps']} "
+          f"gap={res.meta['gap']:.2e} 用时={dt:.2f}s")
+    for k in [(3, 3), (5, 5), (5, 1), (1, 5), (0, 1), (1, 0)]:
+        if k in res.values:
+            pol = {m: round(p, 3) for m, p in res.policy[k].items() if p > 1e-3}
+            print(f"  V{k}={res.values[k]:+.4f}  {pol}")
+    if args.out:
+        from courage.storage.artifacts import save_policy_table
+        p = save_policy_table(args.out, res.policy,
+                              {"mode": args.mode, "gamma": args.gamma,
+                               "gap": res.meta["gap"]})
+        print("已保存:", p)
+
+
+def task_best_response(args) -> None:
+    from courage.solvers.equilibrium import solve_equilibrium
+    from courage.solvers.best_response import solve_best_response
+    from courage.bots.scripts import bots_by_name
+
+    if args.opp == "equilibrium":
+        eq = solve_equilibrium(mode=args.mode, gamma=args.gamma, iters=args.inner,
+                               max_sweeps=args.sweeps, tol=args.tol)
+        opp = eq.policy
+    else:
+        bot = bots_by_name[args.opp]
+        # 作为对手时，其自身气数是 qp → bot.policy(qp, qa)
+        opp = {(qa, qp): bot.policy(qp, qa, mode=args.mode)
+               for qa in range(6) for qp in range(6)}
+
+    res = solve_best_response(args.mode, opp, gamma=args.gamma,
+                              max_sweeps=args.br_sweeps, tol=1e-7)
+    print(f"BR vs {args.opp}: sweeps={res.meta['sweeps']}")
+    for k in [(3, 3), (5, 1), (5, 5)]:
+        if k in res.policy:
+            pol = {m: round(p, 2) for m, p in res.policy[k].items() if p > 1e-3}
+            print(f"  BR{k} V={res.values[k]:+.3f}  {pol}")
+    if args.out:
+        from courage.storage.artifacts import save_policy_table
+        p = save_policy_table(args.out, res.policy,
+                              {"mode": args.mode, "opp": args.opp})
+        print("已保存:", p)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="勇气 · 训练工具")
     sub = ap.add_subparsers(dest="task", required=True)
@@ -103,6 +154,28 @@ def main() -> None:
     op.add_argument("--save", action="store_true")
     op.add_argument("--verbose", action="store_true")
     op.set_defaults(func=task_opponent)
+
+    eqp = sub.add_parser("equilibrium", help="求解平稳均衡策略")
+    eqp.add_argument("--mode", type=int, default=0)
+    eqp.add_argument("--gamma", type=float, default=0.95)
+    eqp.add_argument("--inner", type=int, default=800, help="内层矩阵博弈迭代")
+    eqp.add_argument("--sweeps", type=int, default=400, help="外层值迭代上限")
+    eqp.add_argument("--tol", type=float, default=1e-3)
+    eqp.add_argument("--out", default="")
+    eqp.add_argument("--verbose", action="store_true")
+    eqp.set_defaults(func=task_equilibrium)
+
+    brp = sub.add_parser("best-response", help="求解对某对手的最佳响应")
+    brp.add_argument("--mode", type=int, default=0)
+    brp.add_argument("--opp", default="aggressive",
+                     choices=list(bots_by_name) + ["equilibrium"])
+    brp.add_argument("--gamma", type=float, default=0.95)
+    brp.add_argument("--inner", type=int, default=800)
+    brp.add_argument("--sweeps", type=int, default=400)
+    brp.add_argument("--br-sweeps", dest="br_sweeps", type=int, default=2000)
+    brp.add_argument("--tol", type=float, default=1e-3)
+    brp.add_argument("--out", default="")
+    brp.set_defaults(func=task_best_response)
 
     args = ap.parse_args()
     args.func(args)
