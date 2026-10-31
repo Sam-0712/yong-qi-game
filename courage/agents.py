@@ -1,0 +1,162 @@
+"""对局智能体与擂台。
+
+Agent 统一视角：act(own_qi, opp_qi) / observe(own_qi, opp_qi, own_move, opp_move)。
+这样任一智能体都从「自己的气数在前」出发，避免对手视角错位。
+
+- BotAgent      ：包装脚本 bot（无状态或有 last_opp）
+- TableAgent    ：固定策略表（均衡/BR 产物）
+- ScriptedAgent ：任意脚本函数（如「先攻后守」测试）
+- OnlineBRAgent ：核心——用 BeliefTracker 把历史序列压成因子，
+                  每回合把因子转成对手分布并重解 BR（在线剥削）
+"""
+
+from __future__ import annotations
+
+import random
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
+
+from .bots.scripts import sample_policy
+from .core.rules import judge, next_qi, get_valid_moves
+from .core.state import MODE_STANDARD, QI_MAX
+from .learning.belief import BeliefTracker
+from .policy.settings import PlaySettings, apply_settings
+from .solvers.best_response import solve_best_response
+from .solvers.equilibrium import build_tables
+
+
+class Agent(Protocol):
+    def act(self, own: int, opp: int) -> str: ...
+    def observe(self, own: int, opp: int, own_move: str, opp_move: str) -> None: ...
+    def reset(self) -> None: ...
+
+
+class BotAgent:
+    def __init__(self, bot, mode: int = MODE_STANDARD, rng: Optional[random.Random] = None):
+        self.bot = bot
+        self.mode = mode
+        self.rng = rng or random.Random()
+        self.last_opp: Optional[str] = None
+
+    def act(self, own, opp):
+        return self.bot.act(own, opp, mode=self.mode,
+                            last_opp=self.last_opp, rng=self.rng)
+
+    def observe(self, own, opp, own_move, opp_move):
+        self.last_opp = opp_move
+
+    def reset(self):
+        self.last_opp = None
+
+
+class TableAgent:
+    def __init__(self, table, settings: Optional[PlaySettings] = None,
+                 mode: int = MODE_STANDARD, rng: Optional[random.Random] = None):
+        self.table = table
+        self.settings = settings or PlaySettings()
+        self.mode = mode
+        self.rng = rng or random.Random()
+
+    def act(self, own, opp):
+        legal = get_valid_moves(own, mode=self.mode)
+        base = self.table.get((own, opp)) or {m: 1.0 / len(legal) for m in legal}
+        return sample_policy(apply_settings(base, legal, self.settings), self.rng)
+
+    def observe(self, *a):
+        pass
+
+    def reset(self):
+        pass
+
+
+class ScriptedAgent:
+    def __init__(self, fn: Callable[[int, int, int], str],
+                 rng: Optional[random.Random] = None):
+        self.fn = fn
+        self.rng = rng or random.Random()
+        self.t = 0
+
+    def act(self, own, opp):
+        mv = self.fn(own, opp, self.t)
+        self.t += 1
+        return mv
+
+    def observe(self, *a):
+        pass
+
+    def reset(self):
+        self.t = 0
+
+
+class OnlineBRAgent:
+    """在线信念 → 每回合重解 BR 的剥削型智能体。"""
+
+    def __init__(self, settings: Optional[PlaySettings] = None,
+                 mode: int = MODE_STANDARD, gamma: float = 0.95,
+                 decay: float = 0.85, br_sweeps: int = 300,
+                 rng: Optional[random.Random] = None):
+        self.settings = settings or PlaySettings()
+        self.mode = mode
+        self.gamma = gamma
+        self.br_sweeps = br_sweeps
+        self.rng = rng or random.Random()
+        self.belief = BeliefTracker(decay=decay)
+        self.T = build_tables(mode)
+        self._all = [(qa, qp) for qa in range(QI_MAX + 1) for qp in range(QI_MAX + 1)]
+        self._last_br = None
+
+    def _opp_policy_from_belief(self) -> Dict[Tuple[int, int], Dict[str, float]]:
+        pol = {}
+        for (qa, qp) in self._all:
+            legal = get_valid_moves(qp, mode=self.mode)
+            pol[(qa, qp)] = self.belief.opp_weights(legal, last_own=self.belief.last_own)
+        return pol
+
+    def act(self, own, opp):
+        opp_pol = self._opp_policy_from_belief()
+        br = solve_best_response(self.mode, opp_pol, gamma=self.gamma,
+                                 max_sweeps=self.br_sweeps, tol=1e-4, tables=self.T)
+        legal = get_valid_moves(own, mode=self.mode)
+        base = br.policy.get((own, opp)) or {m: 1.0 / len(legal) for m in legal}
+        return sample_policy(apply_settings(base, legal, self.settings), self.rng)
+
+    def observe(self, own, opp, own_move, opp_move):
+        self.belief.observe(own_move, opp_move)
+
+    def reset(self):
+        self.belief.reset()
+
+
+def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
+             games: int = 200, cap: int = 200,
+             rng: Optional[random.Random] = None) -> Dict[str, object]:
+    rng = rng or random.Random()
+    wins = losses = timeouts = 0
+    rounds: List[int] = []
+    for _ in range(games):
+        ai.reset()
+        opp.reset()
+        qa = qp = 3
+        result = 0
+        for rnd in range(1, cap + 1):
+            a = ai.act(qa, qp)
+            b = opp.act(qp, qa)
+            w = judge(a, b)
+            ai.observe(qa, qp, a, b)
+            opp.observe(qp, qa, b, a)
+            if w != 0:
+                result = w
+                rounds.append(rnd)
+                break
+            qa = next_qi(qa, a)
+            qp = next_qi(qp, b)
+        else:
+            result = 0
+            rounds.append(cap)
+        if result == 1:
+            wins += 1
+        elif result == -1:
+            losses += 1
+        else:
+            timeouts += 1
+    return {"wins": wins, "losses": losses, "timeouts": timeouts,
+            "rounds": rounds, "games": games}

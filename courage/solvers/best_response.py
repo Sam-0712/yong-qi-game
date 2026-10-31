@@ -47,8 +47,8 @@ def _opp_matrix(T: Tables, opp_policy: Dict[Tuple[int, int], Dict[str, float]]
 def solve_best_response(mode: int,
                         opp_policy: Dict[Tuple[int, int], Dict[str, float]],
                         gamma: float = 0.95, max_sweeps: int = 2000,
-                        tol: float = 1e-7) -> BRResult:
-    T = build_tables(mode)
+                        tol: float = 1e-7, tables: Tables | None = None) -> BRResult:
+    T = tables if tables is not None else build_tables(mode)
     S = len(T.states)
     Y = _opp_matrix(T, opp_policy)
 
