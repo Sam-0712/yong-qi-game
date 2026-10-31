@@ -21,6 +21,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..core.rules import MOVES_ATTR
+
 
 def _norm(d: Dict[str, float]) -> Dict[str, float]:
     s = sum(max(v, 0.0) for v in d.values())
@@ -136,6 +138,83 @@ def safe_book(legal: List[str], eps: float = 0.02) -> OpeningBook:
         u = 1.0 / len(p)
         p = {m: (1.0 - eps) * v + eps * u for m, v in p.items()}
     return OpeningBook(_norm(p), {"source": "builtin-safe"})
+
+
+STYLE_OPENING = {
+    # 风格 = 对「招式类别」的先验偏好；乘以 MC 得分再归一。
+    # 只表达"这个风格想怎么打"，具体数值仍由大样本对局决定。
+    "balanced":   {"attack": 1.0, "heavy": 1.0, "defense": 1.55, "dodge": 0.5, "exhale": 1.0, "noqi": 0.5},
+    "aggressive": {"attack": 1.6, "heavy": 1.3, "defense": 0.85, "dodge": 0.4, "exhale": 0.8, "noqi": 0.5},
+    "defensive":  {"attack": 0.6, "heavy": 0.6, "defense": 2.1, "dodge": 1.2, "exhale": 1.1, "noqi": 0.6},
+    "gambler":    {"attack": 1.35, "heavy": 2.0, "defense": 0.75, "dodge": 0.6, "exhale": 0.7, "noqi": 0.5},
+    "thinker":    {"attack": 1.05, "heavy": 0.9, "defense": 1.75, "dodge": 0.8, "exhale": 1.3, "noqi": 0.5},
+}
+
+_CAT_OF = {
+    "馒头": "attack", "双馒": "attack", "雷切": "attack",
+    "螺旋环": "heavy", "咏春": "heavy",
+    "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
+}
+
+
+def build_style_book(scores: Dict[str, float], style: str = "balanced",
+                     temp: float = 0.12, eps: float = 0.04,
+                     start_qi: int = 3, dump_cap: float = 0.20) -> OpeningBook:
+    """MC 得分 × 风格先验 → 该风格的首招分布。
+
+    scores 是"这一手在这个风格下续战"的实测得分率；先 softmax 软化，
+    再乘风格对招式类别的偏好，最后与均匀分布混合（保证每招都可能）。
+
+    dump_cap：**开局把气一次打光的招（如 3 气时的雷切）占比上限**。
+    理由与风格无关：打光气后下一回合没有任何攻击手段（0 气只能吐气/防御/跳），
+    等于主动交出节奏——实测这条分支必败。风格可以激进，但不该自杀。
+    """
+    if not scores:
+        return uniform_book([])
+    mx = max(scores.values())
+    base = {m: math.exp((s - mx) / max(temp, 1e-6)) for m, s in scores.items()}
+    w = STYLE_OPENING.get(style, {})
+    p = {m: v * w.get(_CAT_OF.get(m, "attack"), 1.0) for m, v in base.items()}
+    p = _norm(p)
+
+    # 打光气的招限幅，溢出按比例分给其他招（mode=1 起始 0 气时全部 cost=0，不做限制）
+    if dump_cap is not None and 0 < dump_cap < 1 and start_qi > 0:
+        risky = [m for m in p
+                 if MOVES_ATTR.get(m, [0])[0] >= start_qi and MOVES_ATTR.get(m, [0])[0] > 0]
+        excess = sum(max(0.0, p[m] - dump_cap) for m in risky)
+        if excess > 1e-9:
+            for m in risky:
+                p[m] = min(p[m], dump_cap)
+            others = [m for m in p if m not in risky]
+            tot = sum(p[m] for m in others)
+            if tot > 1e-9:
+                for m in others:
+                    p[m] += excess * p[m] / tot
+
+    p = _norm(p)
+    if eps > 0:
+        u = 1.0 / len(p)
+        p = {m: (1.0 - eps) * v + eps * u for m, v in p.items()}
+    return OpeningBook(_norm(p), {"style": style, "scores": dict(scores),
+                                  "temp": temp, "eps": eps, "dump_cap": dump_cap})
+
+
+def style_book_name(mode: int, style: str) -> str:
+    return f"opening_mode{mode}_{style}.json"
+
+
+def load_style_book(legal: List[str], mode: int, style: str) -> OpeningBook:
+    """按风格加载开局簿；缺失则用内置安全分布（再按风格加权）。"""
+    book = load_opening_book(style_book_name(mode, style))
+    if book is None:
+        base = safe_book(legal)
+        w = STYLE_OPENING.get(style, {})
+        p = {m: base.probs[m] * w.get(_CAT_OF.get(m, "attack"), 1.0) for m in legal}
+        return OpeningBook(_norm(p), {"source": "builtin-safe", "style": style})
+    trimmed = {m: book.probs.get(m, 0.0) for m in legal}
+    if sum(trimmed.values()) <= 1e-9:
+        return safe_book(legal)
+    return OpeningBook(_norm(trimmed), dict(book.meta))
 
 
 def load_or_safe(legal: List[str], name: str = DEFAULT_BOOK_NAME) -> OpeningBook:

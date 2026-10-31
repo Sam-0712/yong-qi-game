@@ -21,7 +21,7 @@ from courage.agents import (BotAgent, OnlineBRAgent, ScriptedAgent,
 from courage.bots.scripts import bots_by_name
 from courage.core.rules import MOVES_ATTR, get_valid_moves, judge, next_qi
 from courage.policy.settings import PlaySettings
-from courage.policy.opening import load_or_safe
+from courage.policy.opening import load_style_book
 from courage.storage.artifacts import load_policy_table
 
 
@@ -30,7 +30,8 @@ def _book(args):
     if getattr(args, "opening", "safe") == "off":
         return None
     qi = 0 if args.mode == 1 else 3
-    return load_or_safe(get_valid_moves(qi, mode=args.mode))
+    style = getattr(args, "style", "balanced")
+    return load_style_book(get_valid_moves(qi, mode=args.mode), args.mode, style)
 
 
 def _robust(args):

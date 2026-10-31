@@ -35,8 +35,16 @@
     heavy: { attack: 2, heavy: 5, defense: 2, dodge: 0.5, exhale: 1, noqi: 0 },
   };
 
-  // 安全开局分布：3 气时没有任何招能击穿「防御」(def3)，所以「防御」本回合不可输；
-  // 其余质量只提供随机性（避免被固定套路针对）。
+  // 五风格开局簿（tools/opening_mc.py 用大样本对局定价：风格先验 × 实测得分）。
+  // 共同约束：3 气时「雷切」会把气一次打光（下一回合无攻击手段=交出节奏），占比限 20%。
+  // balanced 的「防御 51% / 攻击 37%」是有意为之——平衡型应该是攻防大致均衡。
+  const OPENING_BY_STYLE = {
+    balanced: { "吐气": 0.1048, "馒头": 0.0519, "双馒": 0.1206, "雷切": 0.1983, "防御": 0.5108, "跳": 0.0137 },
+    aggressive: { "吐气": 0.0842, "馒头": 0.1083, "双馒": 0.2472, "雷切": 0.1983, "防御": 0.3481, "跳": 0.0138 },
+    defensive: { "吐气": 0.072, "馒头": 0.035, "双馒": 0.0913, "雷切": 0.1983, "防御": 0.5828, "跳": 0.0205 },
+    gambler: { "吐气": 0.0722, "馒头": 0.1103, "双馒": 0.2178, "雷切": 0.1983, "防御": 0.3848, "跳": 0.0166 },
+    thinker: { "吐气": 0.0848, "馒头": 0.0506, "双馒": 0.1174, "雷切": 0.1983, "防御": 0.5332, "跳": 0.0157 },
+  };
   const SAFE_OPENING = { "防御": 0.70, "双馒": 0.13, "雷切": 0.08, "吐气": 0.06, "馒头": 0.02, "跳": 0.01, "无气拨": 0.05 };
 
   // 理性转化者：能必杀就必杀；否则能安全蓄气就蓄气；否则挑高防低耗。
@@ -227,9 +235,10 @@
     }
 
     _openingMove(legal) {
+      const table = OPENING_BY_STYLE[this.cfg.style] || OPENING_BY_STYLE.balanced;
       const p = {};
       let s = 0;
-      for (const m of legal) { p[m] = SAFE_OPENING[m] || 0.02; s += p[m]; }
+      for (const m of legal) { p[m] = table[m] || SAFE_OPENING[m] || 0.02; s += p[m]; }
       let r = this._rnd() * s, acc = 0, last = legal[legal.length - 1];
       for (const m of legal) { last = m; acc += p[m]; if (r <= acc) return m; }
       return last;

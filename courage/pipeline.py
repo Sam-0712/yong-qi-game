@@ -94,13 +94,13 @@ class CouragePlayer:
                 self.agent.belief = bt
 
     def _opening_book(self):
-        """开局簿：训练产物优先，缺失则内置安全分布；opening='off' 时交给 BR。"""
+        """按风格取开局簿（五风格各一本）；opening='off' 时交给 BR。"""
         if self.cfg.opening == "off":
             return None
         from .core.rules import get_valid_moves
-        from .policy.opening import load_or_safe
+        from .policy.opening import load_style_book
         legal = get_valid_moves(0 if self.cfg.mode == 1 else 3, mode=self.cfg.mode)
-        return load_or_safe(legal, self.cfg.opening_book)
+        return load_style_book(legal, self.cfg.mode, self.cfg.style)
 
     # Agent 接口
     def act(self, own: int, opp: int) -> str:

@@ -21,7 +21,8 @@ from typing import Callable, Dict, List, Optional
 from courage.agents import BotAgent, OnlineBRAgent, ScriptedAgent, run_duel
 from courage.bots.scripts import bots_by_name, sample_policy, MOVES_ATTR
 from courage.core.rules import get_valid_moves, judge, next_qi
-from courage.policy.opening import OpeningBook, scores_to_probs, DEFAULT_BOOK_NAME
+from courage.policy.opening import (OpeningBook, build_style_book,
+                                   scores_to_probs, DEFAULT_BOOK_NAME)
 from courage.storage.artifacts import save_json, load_json
 
 QI0 = 3
@@ -75,8 +76,12 @@ def opponent_pool(mode: int) -> Dict[str, object]:
     return pool
 
 
-def make_ai(mode: int, qi_floor: int = 1, floor_win: float = 1.0) -> OnlineBRAgent:
+def make_ai(mode: int, qi_floor: int = 0, floor_win: float = 1.0,
+            style: str = "balanced", sweeps: int = 600) -> OnlineBRAgent:
+    """用于 MC 估值的 AI：续战策略带上目标风格，这样「这一手对这个风格值多少」才是真值。"""
+    from courage.policy.settings import PlaySettings
     return OnlineBRAgent(mode=mode, qi_floor=qi_floor, floor_win=floor_win,
+                         settings=PlaySettings(1.0, style), br_sweeps=sweeps,
                          rng=random.Random(0))
 
 
@@ -99,10 +104,31 @@ def play_forced(ai, opp, first: str, cap: int = 100):
     return 0, cap
 
 
-def build(args) -> OpeningBook:
+STYLES = ["balanced", "aggressive", "defensive", "gambler", "thinker"]
+
+
+def build(args):
+    """style=all 时返回 {style: OpeningBook}，否则返回单个 OpeningBook。"""
     mode = args.mode
+    styles = STYLES if args.style == "all" else [args.style]
+    books = {}
+    for style in styles:
+        books[style] = build_one(args, mode, style)
+        print()
+    if len(books) == 1:
+        return next(iter(books.values()))
+    print("=== 五风格开局簿对比（首招占比 %）===")
+    print("首招   " + "".join(f"{s:>12}" for s in styles))
+    for m in get_valid_moves(QI0, mode=mode):
+        row = f"{m:<6} " + "".join(f"{books[s].probs.get(m,0)*100:11.1f}%" for s in styles)
+        print(row)
+    return books
+
+
+def build_one(args, mode: int, style: str) -> OpeningBook:
     pool = opponent_pool(mode)
     moves = get_valid_moves(QI0, mode=mode)
+    print(f"=== 风格: {style} ===")
     scores: Dict[str, float] = {}
     detail: Dict[str, float] = {}
     print(f"首招候选: {moves}")
@@ -112,7 +138,7 @@ def build(args) -> OpeningBook:
         per: List[str] = []
         for oname, opp in pool.items():
             ow = od = ol = 0
-            ai = make_ai(mode, args.qi_floor, args.floor_win)
+            ai = make_ai(mode, args.qi_floor, args.floor_win, style, args.sweeps)
             for _ in range(args.games):
                 res, _r = play_forced(ai, opp, m, args.cap)
                 if res == 1:
@@ -130,15 +156,14 @@ def build(args) -> OpeningBook:
         detail[m] = scores[m]
         print(f"{m:<6}{scores[m]:>8.3f}{w:>6}{d:>6}{l:>6}   {' '.join(per)}")
 
-    probs = scores_to_probs(scores, temp=args.temp, eps=args.eps)
-    book = OpeningBook(probs, {
-        "mode": mode, "games_per_opp": args.games, "cap": args.cap,
-        "temp": args.temp, "eps": args.eps,
+    # 得分（大样本对局）× 风格先验 → 该风格的首招分布
+    book = build_style_book(scores, style, args.temp, args.eps)
+    book.meta.update({
+        "mode": mode, "style": style, "games_per_opp": args.games, "cap": args.cap,
         "qi_floor": args.qi_floor, "floor_win": args.floor_win,
-        "scores": scores,
     })
     print("\n首招分布:")
-    for m, p in sorted(probs.items(), key=lambda kv: -kv[1]):
+    for m, p in sorted(book.probs.items(), key=lambda kv: -kv[1]):
         print(f"  {m:<5}{p*100:5.1f}%   (bar {'█' * int(round(p * 40))})")
     return book
 
@@ -202,8 +227,11 @@ def main() -> None:
     b.add_argument("--games", type=int, default=30, help="每个对手每个首招的局数")
     b.add_argument("--temp", type=float, default=0.12)
     b.add_argument("--eps", type=float, default=0.04)
+    b.add_argument("--style", default="balanced",
+                   choices=STYLES + ["all"], help="风格（all=五风格各出一本）")
+    b.add_argument("--sweeps", type=int, default=250, help="MC 续战时的 BR 迭代数")
     b.add_argument("--save", action="store_true")
-    b.add_argument("--out", default=DEFAULT_BOOK_NAME)
+    b.add_argument("--out", default="")
     common(b)
     b.set_defaults(func=lambda a: _do_build(a))
 
@@ -222,10 +250,18 @@ def main() -> None:
 
 
 def _do_build(args) -> None:
-    book = build(args)
-    if args.save:
-        save_json(args.out, book.to_dict())
-        print(f"\n已保存: data/artifacts/{args.out}")
+    result = build(args)
+    if not args.save:
+        return
+    if isinstance(result, dict):
+        for st, b in result.items():
+            name = f"opening_mode{args.mode}_{st}.json"
+            save_json(name, b.to_dict())
+            print(f"已保存: data/artifacts/{name}")
+    else:
+        name = args.out or f"opening_mode{args.mode}_{args.style}.json"
+        save_json(name, result.to_dict())
+        print(f"\n已保存: data/artifacts/{name}")
 
 
 def _do_show(args) -> None:
