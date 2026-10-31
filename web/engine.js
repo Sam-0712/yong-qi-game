@@ -296,8 +296,11 @@
 
     act(qa, qp) {
       const legal0 = validMoves(qa, this.cfg.mode);
-      // 首招：按安全开局分布采样（随机、各招可达、不可被固定套路针对）
-      if (this.cfg.opening && this.belief.steps === 0) {
+      // 首招：仅在真正的开局状态（双方起始气）按开局簿采样。
+      // 不能只看 steps===0：0 气局面套用 (3,3) 的开局分布会把「防御」硬塞进去，
+      // 而实测 (0,0) 的最优是唯一解「吐气」。
+      const start = this.cfg.mode === 1 ? 0 : 3;
+      if (this.cfg.opening && this.belief.steps === 0 && qa === start && qp === start) {
         return this._openingMove(legal0);
       }
       const table = this._oppTable();

@@ -126,6 +126,7 @@ class OnlineBRAgent:
         self.conf_scale = conf_scale
         self.robust = robust
         self._last_opening = None
+        self._start_qi = 0 if mode == 1 else 3
         self.rng = rng or random.Random()
         self.persist = persist
         if belief_like is not None:
@@ -168,8 +169,11 @@ class OnlineBRAgent:
         return {m: v / s for m, v in self.opp_open_stats.items() if v > 0}
 
     def act(self, own, opp):
-        # 开局：无任何历史时按「蒙特卡洛开局簿」采样，保证首招随机且各招可达
-        if self.opening_book is not None and getattr(self.belief, "steps", 0) == 0:
+        # 开局：仅在真正的开局状态（双方起始气）按「开局簿」采样，保证首招随机且各招可达。
+        # 注意不能只看 steps==0——若首回合发生在 (0,0)（无气拨模式）或异常状态，
+        # 套用 (3,3) 的开局分布会把「防御」硬塞进 0 气局面（实测该处吐气才是唯一最优）。
+        if (self.opening_book is not None and getattr(self.belief, "steps", 0) == 0
+                and own == self._start_qi and opp == self._start_qi):
             legal = get_valid_moves(own, mode=self.mode)
             m = self.opening_book.sample(legal, self.rng,
                                          opp_open=self.opp_opening_pred())
