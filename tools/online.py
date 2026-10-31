@@ -17,7 +17,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from courage.agents import (BotAgent, OnlineBRAgent, ScriptedAgent,
-                            TableAgent, run_duel)
+                            TableAgent, run_duel, PRIORS)
 from courage.bots.scripts import bots_by_name
 from courage.core.rules import MOVES_ATTR, get_valid_moves, judge, next_qi
 from courage.policy.settings import PlaySettings
@@ -49,7 +49,8 @@ def run_all(args):
         opp1 = BotAgent(bots_by_name[name])
         online = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
                                alpha=args.alpha, smooth=args.smooth,
-                               step_cost=args.step_cost, br_sweeps=args.br_sweeps)
+                               step_cost=args.step_cost, br_sweeps=args.br_sweeps,
+                               prior=PRIORS[args.prior])
         r_on = run_duel(online, opp1, args.mode, games=args.games, cap=args.cap)
 
         opp2 = BotAgent(bots_by_name[name])
@@ -66,7 +67,8 @@ def run_switch(args):
     for label, ai in [
         ("在线信念-BR", OnlineBRAgent(PlaySettings(), mode, decay=args.decay,
                                    alpha=args.alpha, smooth=args.smooth,
-                                   step_cost=args.step_cost, br_sweeps=args.br_sweeps)),
+                                   step_cost=args.step_cost, br_sweeps=args.br_sweeps,
+                                   prior=PRIORS[args.prior])),
         ("固定均衡", TableAgent(policy_eq, PlaySettings(), mode) if policy_eq else None),
     ]:
         if ai is None:
@@ -100,10 +102,17 @@ def run_switch(args):
 
 def run_memory(args):
     from courage.records import EpisodeRecorder
+    from courage.storage.belief_store import load_belief, save_belief
     ai = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
                        alpha=args.alpha, smooth=args.smooth,
                        step_cost=args.step_cost, br_sweeps=args.br_sweeps,
-                       persist=True)
+                       persist=True, prior=PRIORS[args.prior])
+    bid = args.belief_id or args.opp
+    if args.load_belief:
+        bt = load_belief(bid)
+        if bt is not None:
+            ai.belief = bt
+            print(f"  已加载记忆: {bid} (steps={bt.steps})")
     opp = BotAgent(bots_by_name[args.opp])
     if args.record:
         rec = EpisodeRecorder(None if args.record == "default" else args.record)
@@ -130,6 +139,9 @@ def run_memory(args):
     print(f"  之后 {len(results)-k} 局: {stat(results[k:], rounds[k:])}")
     if rec:
         print(f"  记录已写入: {rec.path}  (共 {rec.count()} 条)")
+    if args.save_belief:
+        save_belief(bid, ai.belief)
+        print(f"  已保存记忆: {bid} (steps={ai.belief.steps})")
 
 
 def main() -> None:
@@ -141,6 +153,14 @@ def main() -> None:
                     help="--memory 的对手")
     ap.add_argument("--record", nargs="?", const="default", default="",
                     help="记录双方序列到 JSONL（省略值则用默认路径）")
+    ap.add_argument("--prior", default="none", choices=list(PRIORS),
+                    help="冷启动先验（none=均匀）")
+    ap.add_argument("--load-belief", dest="load_belief", action="store_true",
+                    help="从 SQLite 加载该对手的记忆")
+    ap.add_argument("--save-belief", dest="save_belief", action="store_true",
+                    help="把记忆存入 SQLite")
+    ap.add_argument("--belief-id", dest="belief_id", default="",
+                    help="记忆键（默认用对手名）")
     ap.add_argument("--first-k", dest="first_k", type=int, default=10)
     ap.add_argument("--mode", type=int, default=0)
     ap.add_argument("--games", type=int, default=150)

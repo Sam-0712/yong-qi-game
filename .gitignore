@@ -29,6 +29,9 @@ data/artifacts/
 # 对局记录（分析材料，本地生成）
 data/records/
 
+# 跨会话记忆数据库（本地生成）
+data/belief.db
+
 # 缓存
 .pytest_cache/
 .ruff_cache/

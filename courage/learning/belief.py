@@ -1,19 +1,18 @@
 """信念因子：把「双方完整出招序列」压成 N 个 0~1 的连续因子。
 
-设计要点（对齐用户构想）：
-  - 因子不是「风格标签」，而是连续数值；「风格」只是对因子取值的形象化解读。
-  - 只看上一招太浅；这里用**衰减统计 + 变化点 + 双元可预测性 + 镜像倾向**，
-    让「先连攻几手后转守」与「攻防交替」产生不同的因子取值。
-  - 因子供后续决策（BR 的对手分布）使用；定长、O(1) 增量更新、无 numpy。
+设计要点：
+  - 因子不是「风格标签」，是连续数值；风格只是对因子取值的解读。
+  - 用衰减统计 + 变化点 + 双元可预测性 + 镜像倾向，让「先连攻后转守」
+    与「攻防交替」产生不同取值。
+  - 显式区分「轻攻(attack)」与「重攻(heavy: 螺旋环/咏春)」以及「蓄气(exhale)」，
+    以便估计对手的 **升级/节奏威胁**（防御会随对手气数升高而变危险）。
+  - 支持 Dirichlet 平滑(alpha) 与先验(prior)冷启动；状态可序列化以便 SQLite 持久化。
 
 因子（均 ∈ [0,1]）：
-  long_atk / long_def / long_dodge / long_exhale / long_noqi  长程动作倾向
-  short_atk                                                   短程攻击倾向
-  attack_streak                                               当前连攻长度（归一）
-  switch                                                      近期 vs 长程的分歧（变化点强度）
-  predictability                                              双元转移的集中度
-  mirror                                                      对手模仿「我上一招」的倾向
-  volatility                                                  对手动作的分散程度
+  long_atk / long_heavy / long_def / long_dodge / long_exhale / long_noqi
+  short_atk, attack_streak, switch, predictability, mirror, volatility,
+  escalation = long_exhale + long_heavy    （蓄气+重攻的升级倾向）
+  threat     = 0.3*exhale + 0.5*attack + 1.0*heavy （当前危险度加权）
 """
 
 from __future__ import annotations
@@ -22,22 +21,23 @@ from typing import Dict, List, Optional, Tuple
 
 CATEGORIES: Dict[str, str] = {
     "馒头": "attack", "双馒": "attack", "雷切": "attack",
-    "螺旋环": "attack", "咏春": "attack",
+    "螺旋环": "heavy", "咏春": "heavy",
     "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
 }
-CATS = ["attack", "defense", "dodge", "exhale", "noqi"]
+CATS = ["attack", "heavy", "defense", "dodge", "exhale", "noqi"]
 
 
 class BeliefTracker:
     def __init__(self, decay: float = 0.85, short_decay: float = 0.5,
-                 max_run: int = 6, alpha: float = 0.25, smooth: float = 0.05):
-        # alpha  : 每类动作的 Dirichlet 伪计数（越大越平滑、越不轻易下结论）
-        # smooth : 最终对手分布与均匀分布的混合比例（防止过度自信）
+                 max_run: int = 6, alpha: float = 0.20, smooth: float = 0.05,
+                 prior: Optional[Dict[str, float]] = None, prior_strength: float = 3.0):
         self.d = decay
         self.ds = short_decay
         self.max_run = max_run
         self.alpha = alpha
         self.smooth = smooth
+        self.prior = prior
+        self.prior_strength = prior_strength
         self._reset_stats()
         self.last_own: Optional[str] = None
         self.last_opp: Optional[str] = None
@@ -47,6 +47,14 @@ class BeliefTracker:
         self.long_tot = 0.0
         self.short = {c: 0.0 for c in CATS}
         self.short_tot = 0.0
+        if self.prior:
+            s = sum(max(v, 0.0) for v in self.prior.values()) or 1.0
+            for c in CATS:
+                v = self.prior_strength * max(self.prior.get(c, 0.0), 0.0) / s
+                self.long[c] = v
+                self.short[c] = v
+            self.long_tot = self.prior_strength
+            self.short_tot = self.prior_strength
         self.run = 0.0
         self.bigram: Dict[str, Dict[str, float]] = {c: {} for c in CATS}
         self.bigram_tot = 0.0
@@ -60,13 +68,12 @@ class BeliefTracker:
         self.last_own = None
         self.last_opp = None
 
-    # ── 增量更新（每回合调用一次）──
+    # ── 增量更新 ──
     def observe(self, own_move: Optional[str], opp_move: Optional[str]) -> None:
         cat = CATEGORIES.get(opp_move or "")
         if cat is None:
             self.last_own, self.last_opp = own_move, opp_move
             return
-
         self.long = {c: v * self.d for c, v in self.long.items()}
         self.long_tot *= self.d
         self.short = {c: v * self.ds for c, v in self.short.items()}
@@ -75,9 +82,7 @@ class BeliefTracker:
         self.long_tot += 1.0
         self.short[cat] += 1.0
         self.short_tot += 1.0
-
-        self.run = min(self.run + 1.0, self.max_run) if cat == "attack" else 0.0
-
+        self.run = min(self.run + 1.0, self.max_run) if cat in ("attack", "heavy") else 0.0
         if self.prev_cat is not None:
             for c in self.bigram:
                 self.bigram[c] = {k: w * self.d for k, w in self.bigram[c].items()}
@@ -86,25 +91,21 @@ class BeliefTracker:
             row[cat] = row.get(cat, 0.0) + 1.0
             self.bigram_tot += 1.0
         self.prev_cat = cat
-
         self.mirror *= self.d
         self.mirror_tot *= self.d
         self.mirror_tot += 1.0
         if own_move is not None and opp_move == own_move:
             self.mirror += 1.0
-
         self.steps += 1
         self.last_own, self.last_opp = own_move, opp_move
 
-    # ── 因子读出 ──
+    # ── 因子 ──
     def _props(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         K = len(CATS)
-        den_l = self.long_tot + self.alpha * K
-        den_s = self.short_tot + self.alpha * K
-        lp = {c: ((self.long[c] + self.alpha) / den_l if den_l > 1e-9 else 1.0 / K)
-              for c in CATS}
-        sp = {c: ((self.short[c] + self.alpha) / den_s if den_s > 1e-9 else 1.0 / K)
-              for c in CATS}
+        dl = self.long_tot + self.alpha * K
+        ds = self.short_tot + self.alpha * K
+        lp = {c: ((self.long[c] + self.alpha) / dl if dl > 1e-9 else 1.0 / K) for c in CATS}
+        sp = {c: ((self.short[c] + self.alpha) / ds if ds > 1e-9 else 1.0 / K) for c in CATS}
         return lp, sp
 
     def factors(self) -> Dict[str, float]:
@@ -119,45 +120,80 @@ class BeliefTracker:
             pred = 0.0
         mirror = self.mirror / self.mirror_tot if self.mirror_tot > 1e-9 else 0.0
         volatility = (1.0 - max(lp.values())) if self.long_tot > 1e-9 else 0.0
+        escalation = min(1.0, lp["exhale"] + lp["heavy"])
+        threat = min(1.0, 0.3 * lp["exhale"] + 0.5 * lp["attack"] + 1.0 * lp["heavy"])
         return {
-            "long_atk": lp["attack"], "long_def": lp["defense"],
-            "long_dodge": lp["dodge"], "long_exhale": lp["exhale"],
-            "long_noqi": lp["noqi"], "short_atk": sp["attack"],
-            "attack_streak": streak, "switch": switch,
-            "predictability": pred, "mirror": mirror, "volatility": volatility,
+            "long_atk": lp["attack"], "long_heavy": lp["heavy"],
+            "long_def": lp["defense"], "long_dodge": lp["dodge"],
+            "long_exhale": lp["exhale"], "long_noqi": lp["noqi"],
+            "short_atk": sp["attack"], "attack_streak": streak,
+            "switch": switch, "predictability": pred, "mirror": mirror,
+            "volatility": volatility, "escalation": escalation, "threat": threat,
         }
 
-    # ── 因子 → 对手在当前合法招式上的权重（供 BR 的对手分布）──
-    def opp_weights(self, legal: List[str],
-                    last_own: Optional[str] = None) -> Dict[str, float]:
+    # ── 因子 → 对手分布 ──
+    def opp_weights(self, legal: List[str], last_own: Optional[str] = None) -> Dict[str, float]:
         lp, sp = self._props()
         f = self.factors()
-        w_short = f["switch"]  # 变化点越强，越信短程
+        w_short = f["switch"]
         cat_w = {c: (1.0 - w_short) * lp[c] + w_short * sp[c] for c in CATS}
         if f["attack_streak"] > 0:
             cat_w["attack"] *= (1.0 + 1.5 * f["attack_streak"])
-
+            cat_w["heavy"] *= (1.0 + 1.0 * f["attack_streak"])
         w = {m: cat_w.get(CATEGORIES.get(m, "attack"), 0.0) + 1e-6 for m in legal}
-        # 镜像倾向：对手爱复制我上一招
         if last_own is not None and f["mirror"] > 0.3 and last_own in w:
             w[last_own] += f["mirror"]
         s = sum(w.values())
         w = {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
-        # 与均匀混合，避免对噪声人类过度自信
         if self.smooth > 0:
             u = 1.0 / len(legal)
             w = {m: (1.0 - self.smooth) * w[m] + self.smooth * u for m in legal}
         return w
 
-    # ── 「风格」只是对因子的解读（可选、纯展示，不参与决策）──
+    # ── 序列化（SQLite 持久化用）──
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "decay": self.d, "short_decay": self.ds, "max_run": self.max_run,
+            "alpha": self.alpha, "smooth": self.smooth,
+            "long": self.long, "long_tot": self.long_tot,
+            "short": self.short, "short_tot": self.short_tot,
+            "run": self.run, "bigram": self.bigram, "bigram_tot": self.bigram_tot,
+            "prev_cat": self.prev_cat, "mirror": self.mirror,
+            "mirror_tot": self.mirror_tot, "steps": self.steps,
+            "last_own": self.last_own, "last_opp": self.last_opp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, object]) -> "BeliefTracker":
+        t = cls(decay=float(d.get("decay", 0.85)),
+                short_decay=float(d.get("short_decay", 0.5)),
+                max_run=int(d.get("max_run", 6)),
+                alpha=float(d.get("alpha", 0.20)),
+                smooth=float(d.get("smooth", 0.05)))
+        t.long = {c: float(d["long"].get(c, 0.0)) for c in CATS}
+        t.long_tot = float(d.get("long_tot", 0.0))
+        t.short = {c: float(d["short"].get(c, 0.0)) for c in CATS}
+        t.short_tot = float(d.get("short_tot", 0.0))
+        t.run = float(d.get("run", 0.0))
+        bg = d.get("bigram", {})
+        t.bigram = {c: {k: float(v) for k, v in bg.get(c, {}).items()} for c in CATS}
+        t.bigram_tot = float(d.get("bigram_tot", 0.0))
+        t.prev_cat = d.get("prev_cat")
+        t.mirror = float(d.get("mirror", 0.0))
+        t.mirror_tot = float(d.get("mirror_tot", 0.0))
+        t.steps = int(d.get("steps", 0))
+        t.last_own = d.get("last_own")
+        t.last_opp = d.get("last_opp")
+        return t
+
     @staticmethod
     def describe_style(f: Dict[str, float]) -> str:
-        if f["long_def"] > 0.55:
+        if f["long_def"] > 0.45:
             return "防守型"
-        if f["long_atk"] > 0.55:
+        if f["long_heavy"] > 0.30:
+            return "重攻型"
+        if f["long_atk"] > 0.45:
             return "激进型"
         if f["volatility"] > 0.6:
             return "多变型"
-        if f["predictability"] > 0.7:
-            return "模式化"
         return "混合型"

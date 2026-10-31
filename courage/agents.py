@@ -30,6 +30,16 @@ class Agent(Protocol):
     def reset(self) -> None: ...
 
 
+# 冷启动先验：无历史时对对手类别的先验（可视为 2.0/3.0 蒙特卡洛首招的形式化）。
+PRIORS: Dict[str, Optional[Dict[str, float]]] = {
+    "none": None,
+    "balanced": {"attack": 3, "heavy": 2, "defense": 3, "dodge": 1, "exhale": 1, "noqi": 0},
+    "aggressive": {"attack": 5, "heavy": 3, "defense": 1, "dodge": 0.5, "exhale": 0.5, "noqi": 0},
+    "defensive": {"attack": 1, "heavy": 0.5, "defense": 6, "dodge": 3, "exhale": 1, "noqi": 0},
+    "heavy": {"attack": 2, "heavy": 5, "defense": 2, "dodge": 0.5, "exhale": 1, "noqi": 0},
+}
+
+
 class BotAgent:
     def __init__(self, bot, mode: int = MODE_STANDARD, rng: Optional[random.Random] = None):
         self.bot = bot
@@ -94,6 +104,7 @@ class OnlineBRAgent:
                  mode: int = MODE_STANDARD, gamma: float = 0.95,
                  decay: float = 0.85, alpha: float = 0.20, smooth: float = 0.05,
                  step_cost: float = 0.03, br_sweeps: int = 600, persist: bool = False,
+                 prior: Optional[Dict[str, float]] = None, prior_strength: float = 3.0,
                  rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -102,7 +113,8 @@ class OnlineBRAgent:
         self.br_sweeps = br_sweeps
         self.rng = rng or random.Random()
         self.persist = persist
-        self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth)
+        self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth,
+                                    prior=prior, prior_strength=prior_strength)
         self.T = build_tables(mode)
         self._all = [(qa, qp) for qa in range(QI_MAX + 1) for qp in range(QI_MAX + 1)]
         self._last_br = None
