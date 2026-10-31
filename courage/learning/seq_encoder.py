@@ -222,14 +222,57 @@ def load_encoder(path: str):
 
 def predict_factors(model, own_hist: List[str], opp_hist: List[str]) -> Dict[str, float]:
     X = np.array([encode_step(a, b) for a, b in zip(own_hist, opp_hist)])
-    if getattr(model, "arch", "cnn") == "cnn":
+    arch = getattr(model, "arch", "cnn")
+    if arch == "cnn":
         W, _ = model._windows(X)
         _, yhat = model.forward(W)
-        row = yhat[-1]
+    elif arch == "moe":
+        yhat = model.experts[model._route(opp_hist)].forward(X)[4]
     else:
-        _, _, _, _, yhat = model.forward(X)
-        row = yhat[-1]
+        yhat = model.forward(X)[4]
+    row = yhat[-1]
     return {k: float(row[i]) for i, k in enumerate(FACTOR_KEYS)}
+
+
+# ── 风格路由 + MoE（多个小 GRU + 规则 router，按风格分派）──
+
+def route_style(opp_hist: List[str], k: int = 3) -> int:
+    """按最近 k 步对手动作的主导类别路由：0=defense 1=attack 2=heavy 3=mixed。"""
+    recent = opp_hist[-k:]
+    cats = [CATEGORIES.get(m, "attack") for m in recent]
+    cnt = {"defense": cats.count("defense"),
+           "attack": cats.count("attack"),
+           "heavy": cats.count("heavy")}
+    mx = max(cnt.values())
+    if mx == 0:
+        return 3
+    tops = [c for c, v in cnt.items() if v == mx]
+    if len(tops) != 1:
+        return 3
+    return {"defense": 0, "attack": 1, "heavy": 2}[tops[0]]
+
+
+class MoEStyleEncoder:
+    """按风格路由到 E 个「小 GRU 专家」；每个专家 n 很小，总参数可控。"""
+
+    def __init__(self, n_experts: int = 4, hidden: int = 10, seed: int = 0, lr: float = 0.01):
+        self.arch = "moe"
+        self.n_experts = n_experts
+        self.experts = [GRUEncoder(hidden=hidden, seed=seed + i, lr=lr)
+                        for i in range(n_experts)]
+
+    def n_params(self) -> int:
+        return sum(e.n_params() for e in self.experts)
+
+    def _route(self, opp_hist) -> int:
+        s = route_style(opp_hist)
+        return s if s < self.n_experts else self.n_experts - 1
+
+    def fit_seq(self, X, Y, opp_hist):
+        self.experts[self._route(opp_hist)].fit_step(X, Y)
+
+    def predict_seq(self, X, opp_hist):
+        return self.experts[self._route(opp_hist)].predict_seq(X)
 
 
 class EncoderBelief:
