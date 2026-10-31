@@ -44,13 +44,19 @@ def make_switch_fn(mode, attack_rounds=3):
 
 def run_all(args):
     eq_pol, _ = load_policy_table("policy_mode0.json")
+    encoder_model = None
+    if args.encoder_file:
+        from courage.learning.seq_encoder import load_encoder
+        encoder_model = load_encoder(args.encoder_file)
+    from courage.learning.seq_encoder import EncoderBelief
     print(f"{'对手':<10}{'在线信念-BR':<44}{'固定均衡':<30}")
     for name in bots_by_name:
         opp1 = BotAgent(bots_by_name[name])
+        belief = EncoderBelief(encoder_model) if encoder_model is not None else None
         online = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
                                alpha=args.alpha, smooth=args.smooth,
                                step_cost=args.step_cost, br_sweeps=args.br_sweeps,
-                               prior=PRIORS[args.prior])
+                               prior=PRIORS[args.prior], belief_like=belief)
         r_on = run_duel(online, opp1, args.mode, games=args.games, cap=args.cap)
 
         opp2 = BotAgent(bots_by_name[name])
@@ -155,6 +161,8 @@ def main() -> None:
                     help="记录双方序列到 JSONL（省略值则用默认路径）")
     ap.add_argument("--prior", default="none", choices=list(PRIORS),
                     help="冷启动先验（none=均匀）")
+    ap.add_argument("--encoder-file", dest="encoder_file", default="",
+                    help="用序列编码器替代手写信念（A/B）")
     ap.add_argument("--load-belief", dest="load_belief", action="store_true",
                     help="从 SQLite 加载该对手的记忆")
     ap.add_argument("--save-belief", dest="save_belief", action="store_true",

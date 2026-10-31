@@ -105,7 +105,7 @@ class OnlineBRAgent:
                  decay: float = 0.85, alpha: float = 0.20, smooth: float = 0.05,
                  step_cost: float = 0.03, br_sweeps: int = 600, persist: bool = False,
                  prior: Optional[Dict[str, float]] = None, prior_strength: float = 3.0,
-                 rng: Optional[random.Random] = None):
+                 belief_like=None, rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
         self.gamma = gamma
@@ -113,8 +113,11 @@ class OnlineBRAgent:
         self.br_sweeps = br_sweeps
         self.rng = rng or random.Random()
         self.persist = persist
-        self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth,
-                                    prior=prior, prior_strength=prior_strength)
+        if belief_like is not None:
+            self.belief = belief_like
+        else:
+            self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth,
+                                        prior=prior, prior_strength=prior_strength)
         self.T = build_tables(mode)
         self._all = [(qa, qp) for qa in range(QI_MAX + 1) for qp in range(QI_MAX + 1)]
         self._last_br = None

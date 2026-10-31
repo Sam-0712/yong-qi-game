@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from ..core.rules import MOVE_TO_IDX, MOVES
-from .belief import BeliefTracker
+from .belief import BeliefTracker, CATEGORIES, CATS
 
 FACTOR_KEYS = [
     "long_atk", "long_heavy", "long_def", "long_dodge", "long_exhale", "long_noqi",
@@ -200,3 +200,90 @@ class GRUEncoder:
 def rmse_per_factor(pred: np.ndarray, Y: np.ndarray) -> Dict[str, float]:
     err = np.sqrt(((pred - Y) ** 2).mean(0))
     return {k: float(err[i]) for i, k in enumerate(FACTOR_KEYS)}
+
+
+# ── 加载 & 推理适配（把编码器接到 BR 上）──
+
+def load_encoder(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        blob = json.load(f)
+    arch = blob.get("arch", "cnn")
+    if arch == "cnn":
+        m = CNNEncoder(window=int(blob["window"]), hidden=int(blob["hidden"]))
+    else:
+        m = GRUEncoder(hidden=int(blob["hidden"]))
+    for k in m.params:
+        m.params[k] = np.array(blob[k], dtype=np.float64)
+    m.arch = arch
+    return m
+
+
+def predict_factors(model, own_hist: List[str], opp_hist: List[str]) -> Dict[str, float]:
+    X = np.array([encode_step(a, b) for a, b in zip(own_hist, opp_hist)])
+    if getattr(model, "arch", "cnn") == "cnn":
+        W, _ = model._windows(X)
+        _, yhat = model.forward(W)
+        row = yhat[-1]
+    else:
+        _, _, _, _, yhat = model.forward(X)
+        row = yhat[-1]
+    return {k: float(row[i]) for i, k in enumerate(FACTOR_KEYS)}
+
+
+class EncoderBelief:
+    """用编码器替代手写信念，接口对齐 BeliefTracker（供 BR 使用）。"""
+
+    def __init__(self, model, max_len: int = 24, smooth: float = 0.05):
+        self.model = model
+        self.max_len = max_len
+        self.smooth = smooth
+        self.own: List[str] = []
+        self.opp: List[str] = []
+        self.last_own = None
+        self.steps = 0
+
+    def reset(self):
+        self.own, self.opp = [], []
+        self.last_own = None
+        self.steps = 0
+
+    def observe(self, own_move, opp_move):
+        if opp_move is None:
+            return
+        self.own.append(own_move)
+        self.opp.append(opp_move)
+        if len(self.own) > self.max_len:
+            self.own.pop(0); self.opp.pop(0)
+        self.last_own = own_move
+        self.steps += 1
+
+    def factors(self) -> Dict[str, float]:
+        if not self.own:
+            # 无历史：给均匀先验
+            u = 1.0 / len(CATS)
+            return {k: u for k in FACTOR_KEYS}
+        return predict_factors(self.model, self.own, self.opp)
+
+    def opp_weights(self, legal, last_own=None):
+        f = self.factors()
+        cat_long = {
+            "attack": f["long_atk"], "heavy": f["long_heavy"],
+            "defense": f["long_def"], "dodge": f["long_dodge"],
+            "exhale": f["long_exhale"], "noqi": f["long_noqi"],
+        }
+        cat_short = dict(cat_long)
+        cat_short["attack"] = f["short_atk"]
+        ws = f["switch"]
+        cat_w = {c: (1 - ws) * cat_long[c] + ws * cat_short[c] for c in CATS}
+        if f["attack_streak"] > 0:
+            cat_w["attack"] *= (1 + 1.5 * f["attack_streak"])
+            cat_w["heavy"] *= (1 + 1.0 * f["attack_streak"])
+        w = {m: cat_w.get(CATEGORIES.get(m, "attack"), 0.0) + 1e-6 for m in legal}
+        if last_own is not None and f["mirror"] > 0.3 and last_own in w:
+            w[last_own] += f["mirror"]
+        s = sum(w.values())
+        w = {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
+        if self.smooth > 0:
+            u = 1.0 / len(legal)
+            w = {m: (1 - self.smooth) * w[m] + self.smooth * u for m in legal}
+        return w
