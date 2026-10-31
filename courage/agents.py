@@ -134,18 +134,30 @@ class OnlineBRAgent:
 
 def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
              games: int = 200, cap: int = 200,
-             rng: Optional[random.Random] = None) -> Dict[str, object]:
+             rng: Optional[random.Random] = None,
+             reset_per_game: bool = True,
+             recorder=None, opp_label: str = "?") -> Dict[str, object]:
+    """跑多局。reset_per_game=False 可实现跨局记忆（不清空 AI 信念）。
+    recorder 若提供（有 .log(**rec)），每局落盘双方完整序列。"""
     rng = rng or random.Random()
     wins = losses = timeouts = 0
     rounds: List[int] = []
-    for _ in range(games):
-        ai.reset()
+    results: List[int] = []
+    for g in range(games):
         opp.reset()
+        if reset_per_game:
+            ai.reset()
         qa = qp = 3
         result = 0
+        ai_seq: List[str] = []
+        opp_seq: List[str] = []
+        qi_seq: List[list] = []
         for rnd in range(1, cap + 1):
             a = ai.act(qa, qp)
             b = opp.act(qp, qa)
+            ai_seq.append(a)
+            opp_seq.append(b)
+            qi_seq.append([qa, qp])
             w = judge(a, b)
             ai.observe(qa, qp, a, b)
             opp.observe(qp, qa, b, a)
@@ -158,6 +170,11 @@ def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
         else:
             result = 0
             rounds.append(cap)
+        results.append(result)
+        if recorder is not None:
+            recorder.log(game=g, opp=opp_label, mode=mode, result=result,
+                         rounds=rounds[-1], ai_seq=ai_seq, opp_seq=opp_seq,
+                         qi_seq=qi_seq)
         if result == 1:
             wins += 1
         elif result == -1:
@@ -165,4 +182,4 @@ def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
         else:
             timeouts += 1
     return {"wins": wins, "losses": losses, "timeouts": timeouts,
-            "rounds": rounds, "games": games}
+            "rounds": rounds, "results": results, "games": games}

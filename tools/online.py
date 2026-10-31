@@ -98,10 +98,50 @@ def run_switch(args):
             qa, qp = next_qi(qa, a), next_qi(qp, b)
 
 
+def run_memory(args):
+    from courage.records import EpisodeRecorder
+    ai = OnlineBRAgent(PlaySettings(), args.mode, decay=args.decay,
+                       alpha=args.alpha, smooth=args.smooth,
+                       step_cost=args.step_cost, br_sweeps=args.br_sweeps,
+                       persist=True)
+    opp = BotAgent(bots_by_name[args.opp])
+    if args.record:
+        rec = EpisodeRecorder(None if args.record == "default" else args.record)
+    else:
+        rec = None
+    res = run_duel(ai, opp, args.mode, games=args.games, cap=args.cap,
+                   reset_per_game=False, recorder=rec, opp_label=args.opp)
+
+    results, rounds = res["results"], res["rounds"]
+    k = min(args.first_k, len(results))
+
+    def stat(rs, rd):
+        n = len(rs)
+        if n == 0:
+            return "(无)"
+        w = sum(1 for r in rs if r == 1)
+        l = sum(1 for r in rs if r == -1)
+        t = n - w - l
+        return (f"胜{w}/负{l}/超{t} | 胜率 {w/n:5.1%} | "
+                f"回合均值 {sum(rd)/n:4.1f}")
+
+    print(f"跨局记忆 & 序列记录 vs {args.opp} | games={len(results)}")
+    print(f"  前 {k} 局   : {stat(results[:k], rounds[:k])}")
+    print(f"  之后 {len(results)-k} 局: {stat(results[k:], rounds[k:])}")
+    if rec:
+        print(f"  记录已写入: {rec.path}  (共 {rec.count()} 条)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="勇气 · 在线信念-BR")
     ap.add_argument("--all", action="store_true", help="对各脚本对手做对照")
     ap.add_argument("--switch", action="store_true", help="演示先攻后守")
+    ap.add_argument("--memory", action="store_true", help="跨局记忆演示")
+    ap.add_argument("--opp", default="turtle", choices=list(bots_by_name),
+                    help="--memory 的对手")
+    ap.add_argument("--record", nargs="?", const="default", default="",
+                    help="记录双方序列到 JSONL（省略值则用默认路径）")
+    ap.add_argument("--first-k", dest="first_k", type=int, default=10)
     ap.add_argument("--mode", type=int, default=0)
     ap.add_argument("--games", type=int, default=150)
     ap.add_argument("--cap", type=int, default=200)
@@ -116,9 +156,11 @@ def main() -> None:
 
     import random
     random.seed(args.seed)
-    if args.switch:
+    if args.memory:
+        run_memory(args)
+    elif args.switch:
         run_switch(args)
-    if args.all or not args.switch:
+    else:
         run_all(args)
 
 

@@ -26,6 +26,9 @@ build/
 # 生成产物（策略表/模型权重，按需生成）
 data/artifacts/
 
+# 对局记录（分析材料，本地生成）
+data/records/
+
 # 缓存
 .pytest_cache/
 .ruff_cache/
