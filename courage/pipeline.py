@@ -43,7 +43,8 @@ class PlayerConfig:
     opening: str = "safe"                     # "safe"=开局簿采样 / "off"=BR 决定首招
     opening_book: str = "opening_mode0.json"  # 训练产物；缺失则用内置安全分布
     robust: float = 0.3                       # 幽灵威胁（理性转化者）权重，按样本量衰减但不归零
-    zero_penalty: float = 0.4                 # 归零惩罚：把气打到 0 的续接价值要打折
+    zero_penalty: float = 0.15                # 归零惩罚：把气打到 0 的续接价值要打折
+    loop_risk: float = 0.9                    # 破僵局时选「改气数」招的概率
     round_total: int = 15                     # 预期对局长度（轮数退火基准）
     noise0: float = 0.0                       # 起始随机比例（默认关：防死锁交给 anti_loop）
     urgency: float = 3.0                      # step_cost 在末段的放大倍数
@@ -91,6 +92,7 @@ class CouragePlayer:
             zero_penalty=self.cfg.zero_penalty,
             round_total=self.cfg.round_total, noise0=self.cfg.noise0,
             urgency=self.cfg.urgency, anti_loop=self.cfg.anti_loop,
+            loop_risk=self.cfg.loop_risk,
             opening_book=self._opening_book(),
             belief_like=belief_like, rng=random.Random(self.cfg.seed),
         )

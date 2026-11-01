@@ -327,7 +327,8 @@
         prior: "none", seed: 12345, robust: 0.3, opening: true, belief: "auto",
         // noise0 默认 0：全局随机会把定理级正确的最优招一起随机掉
         // （(0,0) 该出吐气，被 noise 0.30 污染到 82%）。防死锁交给 antiLoop。
-        roundTotal: 15, noise0: 0.0, urgency: 3.0, zeroPenalty: 0.4, antiLoop: true,
+        roundTotal: 15, noise0: 0.0, urgency: 3.0, zeroPenalty: 0.15, antiLoop: true,
+        riskMix: 0.0, loopRisk: 0.9, policyDynStep: true, zpInPolicy: true, zpThreatDrop: 0.9,
       }, cfg);
       const enc = (typeof globalThis !== "undefined" && globalThis.CourageEncoder) || null;
       const wantGru = this.cfg.belief === "gru"
@@ -409,6 +410,10 @@
       return 0;
     }
 
+    // 打破僵局时**不要总是冒险**：僵持态(1,1)里"改气数"意味着吐气撞上馒头就死，
+    // 老版本每次都选改气数，于是被"固定吐气/馒头"的脚本按顺序吃掉。
+    // 现在按 loopRisk 在「保守(不改气数)」与「冒险(改气数)」之间随机，
+    // 对手无法靠猜我们的破局方向来反制。
     _loopBreak(qa, qp, legal, dist) {
       if (!this.cfg.antiLoop) return null;
       const p = this._detectCycle();
@@ -420,7 +425,13 @@
       if (!alt.length) alt = legal.filter((m) => nextQi(qa, m) !== qa);
       if (!alt.length) return null;
       const prog = alt.filter((m) => nextQi(qa, m) !== qa);
-      const pool = prog.length ? prog : alt;
+      const safe = alt.filter((m) => nextQi(qa, m) === qa);
+      let pool;
+      if (prog.length && safe.length) {
+        pool = this._rnd() < (this.cfg.loopRisk ?? 0.5) ? prog : safe;
+      } else {
+        pool = prog.length ? prog : (safe.length ? safe : alt);
+      }
       return pool.reduce((x, y) => ((dist[x] || 0) >= (dist[y] || 0) ? x : y));
     }
 
@@ -487,23 +498,60 @@
       return V;
     }
 
-    _policy(qa, qp, V, table) {
+    // 从解出的 V 取当前状态的 Q 与「被一击打死」的概率
+    _qAt(qa, qp, V, table, stepCost) {
       const A = validMoves(qa, this.cfg.mode), B = validMoves(qp, this.cfg.mode);
-      const qs = [];
+      const sc = (stepCost === undefined ? this.cfg.stepCost : stepCost);
+      const opp = table[SID(qa, qp)];
+      const qs = [], death = [];
       for (const a of A) {
-        let q = 0;
+        const na = nextQi(qa, a);
+        // 归零惩罚按「对手威胁度」缩放：对手在蓄气(threat 高)时，打光气去打断是值得的；
+        // 对手慢吞吞时，保气更划算。这是 (3,4) 打穿吐气 与 (3,3) 不自毁 的区分点。
+        let th = 0;
+        try { if (this.belief.factors) th = this.belief.factors().threat || 0; } catch (e) { th = 0; }
+        const zp = (this.cfg.zpInPolicy !== false && this.cfg.zeroPenalty > 0 && na === 0)
+          ? this.cfg.zeroPenalty * (1 - (this.cfg.zpThreatDrop || 0) * th) : 0;
+        let q = 0, d = 0;
         for (const b of B) {
-          const pb = table[SID(qa, qp)][b] || 0; if (!pb) continue;
+          const pb = opp[b] || 0; if (!pb) continue;
           const w = judge(a, b);
-          q += pb * (w !== 0 ? w : this.cfg.gamma * V[SID(nextQi(qa, a), nextQi(qp, b))] - this.cfg.stepCost);
+          if (w !== 0) { q += pb * w; if (w === -1) d += pb; }
+          else q += pb * (this.cfg.gamma * V[SID(na, nextQi(qp, b))] - sc - zp);
         }
-        qs.push(q);
+        qs.push(q); death.push(d);
       }
+      return { A, qs, death };
+    }
+
+    // ── 关键状态混合（risk-adaptive mixing）──
+    // 纯 argmax 是确定性的：对手把你的一招摸清就能反制（实测被"R1防御 → R2馒头"
+    // 这类两手指令打穿）。但**全局随机也不行**——它会把定理级最优一起随机掉
+    // （(0,0) 该出吐气，被 noise 0.30 污染到 82%）。
+    //
+    // 折中：只在「最优动作存在被一击致命的概率」时才展开 softmax。
+    //   t = riskMix × P(本回合被直接打死 | 最优动作)
+    // - 优势/安全局面：死亡率 0 → t=0 → 完全确定（保持剥削力）
+    // - 危险局面（吐气/防御这类 def=0 的招）：t>0 → 在次优之间混合，
+    //   对手无法靠"固定第二手"白吃我们。
+    _policy(qa, qp, V, table, stepCost) {
+      const { A, qs, death } = this._qAt(qa, qp, V, table, stepCost);
       const mx = Math.max(...qs);
-      let dist = {};
-      const best = A.filter((_, i) => qs[i] >= mx - 1e-9);
-      best.forEach(m => dist[m] = 1 / best.length);
-      return dist; // BR 分布（确定性 argmax，平局均分）
+      const bestIdx = [];
+      for (let i = 0; i < qs.length; i++) if (qs[i] >= mx - 1e-9) bestIdx.push(i);
+
+      const pd = Math.max(...bestIdx.map((i) => death[i]));
+      const t = (this.cfg.riskMix || 0) * pd;
+      if (t > 1e-6) {
+        const w = qs.map((q) => Math.exp((q - mx) / t));
+        const sum = w.reduce((x, y) => x + y, 0);
+        const dist = {};
+        A.forEach((m, i) => { const p = w[i] / sum; if (p > 1e-6) dist[m] = p; });
+        return dist;
+      }
+      const dist = {};
+      bestIdx.forEach((i) => { dist[A[i]] = 1 / bestIdx.length; });
+      return dist;
     }
 
     act(qa, qp) {
@@ -521,7 +569,8 @@
       const dyn = this._roundDyn();
       const table = this._oppTable();
       const V = this._solveBR(table, dyn.step);
-      let dist = this._policy(qa, qp, V, table);
+      const policyStep = this.cfg.policyDynStep ? dyn.step : this.cfg.stepCost;
+      let dist = this._policy(qa, qp, V, table, policyStep);
 
       // 风格偏置
       const bias = STYLE_BIAS[this.cfg.style] || {};

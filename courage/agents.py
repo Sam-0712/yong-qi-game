@@ -115,7 +115,7 @@ class OnlineBRAgent:
                  eq_policy=None, conf_scale: float = 1.5, robust: float = 0.0,
                  eq_mix: Optional[float] = None,
                  round_total: int = 15, noise0: float = 0.0,
-                 urgency: float = 3.0, anti_loop: bool = True,
+                 urgency: float = 3.0, anti_loop: bool = True, loop_risk: float = 0.9,
                  belief_like=None, rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -146,6 +146,7 @@ class OnlineBRAgent:
         self.noise0 = noise0
         self.urgency = urgency
         self.anti_loop = anti_loop
+        self.loop_risk = loop_risk
         self._hist = []          # [(state, our_move)]，用于周期检测
         self._last_opening = None
         self._start_qi = 0 if mode == 1 else 3
@@ -238,9 +239,14 @@ class OnlineBRAgent:
             alt = [m for m in legal if next_qi(own, m) != own]
         if not alt:
             return None
-        # 优先能改变气数的（否则只是换个姿势继续僵持），再按原策略权重挑
+        # 破僵局时在「冒险(改气数)」与「保守」之间按 loop_risk 概率二选一：
+        # 总是冒险会被"固定第二手"的脚本按顺序吃掉（实测 2手套路 5/25 -> 20/10）。
         progress = [m for m in alt if next_qi(own, m) != own]
-        pool = progress or alt
+        safe = [m for m in alt if next_qi(own, m) == own]
+        if progress and safe:
+            pool = progress if self.rng.random() < self.loop_risk else safe
+        else:
+            pool = progress or safe or alt
         return max(pool, key=lambda m: base.get(m, 0.0))
 
     def _round_dyn_unused(self):
