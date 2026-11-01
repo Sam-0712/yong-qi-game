@@ -5,6 +5,8 @@ from .opponent import OpponentModel, features
 from .type_model import OpponentTypeModel
 from .context_model import ContextOpponentModel
 from .hybrid_model import HybridOpponentModel
+from .mixture_model import MixtureOpponentModel, UniformChannel
 
 __all__ = ["BeliefTracker", "OpponentModel", "features", "OpponentTypeModel",
-           "ContextOpponentModel", "HybridOpponentModel"]
+           "ContextOpponentModel", "HybridOpponentModel",
+           "MixtureOpponentModel", "UniformChannel"]

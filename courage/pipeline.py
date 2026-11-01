@@ -46,6 +46,13 @@ class PlayerConfig:
     type_decay: float = 1.0                   # <1 时更快遗忘旧证据
     type_eps: float = 0.02                    # 观测似然下限（不把类型一票否决）
     type_smooth: float = 0.02
+    # 通道装配："switch"=硬切换（旧）/ "mix"=按预测似然指数加权后混合
+    gate: str = "mix"
+    mix_eta: float = 1.0                      # 1=贝叶斯模型平均；<1 更保守
+    mix_decay: float = 1.0                    # <1 更快遗忘旧证据（非平稳对手）
+    mix_prior: float = 0.02                   # 权重地板，防一条通道被永久打死
+    mix_null: float = 0.4                     # 「无结构」零假设（uniform 通道）的先验
+    mix_hand: bool = False                    # 14 因子手写信念：实测 logloss 不如均匀，默认关
     # 抗针对性（见 docs/勇气5.0算法修正-针对性漏洞.md）
     opening: str = "safe"                     # "safe"=开局簿采样 / "off"=BR 决定首招
     opening_book: str = "opening_mode0.json"  # 训练产物；缺失则用内置安全分布
@@ -124,6 +131,9 @@ class CouragePlayer:
             opening_book=self._opening_book(),
             belief_like=belief_like, type_model=type_model,
             type_blend=self.cfg.type_blend, rng=random.Random(self.cfg.seed),
+            gate=self.cfg.gate, mix_eta=self.cfg.mix_eta,
+            mix_decay=self.cfg.mix_decay, mix_prior=self.cfg.mix_prior,
+            mix_null=self.cfg.mix_null, mix_hand=self.cfg.mix_hand,
         )
 
         if self.cfg.persist and self.cfg.opp_id and self.cfg.belief_source == "hand":

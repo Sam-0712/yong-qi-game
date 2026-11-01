@@ -14,15 +14,13 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from ..bots.scripts import bots_by_name
+from ..bots.opponents import EXPLOIT4 as _EXPLOIT4
+from ..bots.opponents import OPPONENTS, TYPE_SET
 from ..core.rules import get_valid_moves
-from .threat import converter_policy
+from .threat import converter_policy  # noqa: F401  (保留导出，供旧脚本使用)
 
-EXPLOIT4 = ["防御", "吐气", "吐气", "咏春"]
-DEFAULT_TYPES = [
-    "turtle", "defensive", "aggressive", "two", "exploit4",
-    "converter", "mirror", "cycler", "random",
-]
+EXPLOIT4 = list(_EXPLOIT4)          # 兼容旧名字；定义在 bots/opponents.py
+DEFAULT_TYPES = list(TYPE_SET)      # 类型集合与 style 库保持单一来源
 
 
 def _uniform(legal: List[str]) -> Dict[str, float]:
@@ -67,27 +65,19 @@ class OpponentTypeModel:
     # ── 类型策略 ──
     def _policy(self, t: str, qa: int, qp: int,
                 last_own: Optional[str]) -> Dict[str, float]:
+        """类型 t 的剧本分布（**对手视角**：qp 是对手自己的气数）。
+
+        剧本全部来自 ``courage/bots/opponents.py``——类型后验「假设的对手」与评测
+        「实际跑的对手」必须是同一个对象，否则命中率/胜率测的是别的东西。
+        """
         legalB = get_valid_moves(qp, mode=self.mode)
-        legalA = get_valid_moves(qa, mode=self.mode)
         if not legalB:
             return {}
-        if t == "two":
-            want = "防御" if self.steps == 0 else ("馒头" if self.steps == 1 else None)
-            if want is not None:
-                return {want: 1.0} if want in legalB else _uniform(legalB)
-            return _norm(converter_policy(legalB, legalA), legalB)
-        if t == "exploit4":
-            want = EXPLOIT4[self.steps] if self.steps < len(EXPLOIT4) else (
-                "咏春" if qp >= 5 else "吐气")
-            return {want: 1.0} if want in legalB else _uniform(legalB)
-        if t == "converter":
-            return _norm(converter_policy(legalB, legalA), legalB)
-        if t == "random":
+        spec = OPPONENTS.get(t)
+        if spec is None:
             return _uniform(legalB)
-        bot = bots_by_name.get(t)
-        if bot is None:
-            return _uniform(legalB)
-        return _norm(bot.policy(qp, qa, mode=self.mode, last_opp=last_own), legalB)
+        return spec.policy(qp, qa, t=self.steps, own_last=None,
+                           opp_last=last_own, mode=self.mode)
 
     # ── 观测更新 ──
     def observe(self, qa: int, qp: int, own_move: str, opp_move: str) -> None:

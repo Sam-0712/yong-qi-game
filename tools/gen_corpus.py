@@ -23,86 +23,23 @@ import os
 import random
 import sys
 from collections import Counter
-from typing import Dict, List, Optional
+from typing import Dict
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from courage.agents import BotAgent
-from courage.bots.scripts import RandomBot, bots_by_name, sample_policy
-from courage.core.rules import get_valid_moves, judge, next_qi
-from courage.learning.threat import converter_policy
-
-EXPLOIT4 = ["防御", "吐气", "吐气", "咏春"]
+from courage.bots.opponents import OPPONENTS, make_opponent
+from courage.core.rules import judge, next_qi
 
 
-class FnAgent:
-    """按 (own_qi, opp_qi, t, last_self, last_opp) 出招的轻量脚本对手。"""
+def make_agent(name: str, seed: int):
+    """对手脚本统一来自 courage/bots/opponents.py。
 
-    def __init__(self, name: str, fn, rng: Optional[random.Random] = None):
-        self.name = name
-        self.fn = fn
-        self.rng = rng or random.Random()
-        self.t = 0
-        self.last_self: Optional[str] = None
-        self.last_opp: Optional[str] = None
-
-    def reset(self) -> None:
-        self.t = 0
-        self.last_self = None
-        self.last_opp = None
-
-    def act(self, own: int, opp: int) -> str:
-        legal = get_valid_moves(own, mode=0)
-        v = self.fn(own, opp, self.t, self.last_self, self.last_opp, self.rng)
-        return v if v in legal else legal[0]
-
-    def observe(self, own, opp, own_move, opp_move) -> None:
-        self.last_self, self.last_opp = own_move, opp_move
-        self.t += 1
-
-
-def _pressure(own, opp, t, last_self, last_opp, rng):
-    legal = get_valid_moves(own, mode=0)
-    if own >= 2 and "双馒" in legal:
-        return "双馒"
-    if own >= 1 and "馒头" in legal:
-        return "馒头"
-    if "吐气" in legal:
-        return "吐气"
-    return "防御"
-
-
-def _alternate_low(own, opp, t, last_self, last_opp, rng):
-    legal = get_valid_moves(own, mode=0)
-    if own <= 2 and opp <= 2:
-        if last_self == "吐气" and "馒头" in legal:
-            return "馒头"
-        if last_self == "馒头" and "吐气" in legal:
-            return "吐气"
-        return "吐气" if "吐气" in legal else "防御"
-    return "防御" if "防御" in legal else ("跳" if "跳" in legal else "吐气")
-
-
-def _exploit4(own, opp, t, last_self, last_opp, rng):
-    legal = get_valid_moves(own, mode=0)
-    want = EXPLOIT4[t] if t < len(EXPLOIT4) else ("咏春" if own >= 5 else "吐气")
-    return want if want in legal else "吐气"
-
-
-def _two(own, opp, t, last_self, last_opp, rng):
-    if t == 0:
-        return "防御"
-    if t == 1:
-        return "馒头" if "馒头" in get_valid_moves(own, mode=0) else "防御"
-    return sample_policy(converter_policy(get_valid_moves(own, mode=0),
-                                          get_valid_moves(opp, mode=0)), rng)
-
-
-def _converter(own, opp, t, last_self, last_opp, rng):
-    return sample_policy(converter_policy(get_valid_moves(own, mode=0),
-                                          get_valid_moves(opp, mode=0)), rng)
+    与 `learning/type_model.py`（类型后验假设的剧本）和 `tools/bench.py`
+    （评测实际跑的剧本）共用同一份定义——此前三处各写一份且已不一致。
+    """
+    return make_opponent(name, seed)
 
 
 POLICIES: Dict[str, float] = {
@@ -120,16 +57,9 @@ POLICIES: Dict[str, float] = {
     "converter": 0.07,
 }
 
-
-def make_agent(name: str, seed: int):
-    rng = random.Random(seed)
-    if name == "random":
-        return BotAgent(RandomBot(), rng=rng)
-    if name in bots_by_name:
-        return BotAgent(bots_by_name[name], rng=rng)
-    fn = {"pressure": _pressure, "alternate_low": _alternate_low,
-          "exploit4": _exploit4, "two": _two, "converter": _converter}[name]
-    return FnAgent(name, fn, rng=rng)
+_MISSING = [k for k in POLICIES if k not in OPPONENTS]
+if _MISSING:
+    raise RuntimeError(f"语料策略未在 courage/bots/opponents.py 里定义: {_MISSING}")
 
 
 def choose_policy(rng: random.Random) -> str:

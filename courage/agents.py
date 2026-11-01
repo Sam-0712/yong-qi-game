@@ -117,6 +117,9 @@ class OnlineBRAgent:
                  round_total: int = 15, noise0: float = 0.0,
                  urgency: float = 3.0, anti_loop: bool = True, loop_risk: float = 0.9,
                  belief_like=None, type_model=None, type_blend: float = 0.0,
+                 gate: str = "switch", mix_eta: float = 1.0,
+                 mix_decay: float = 1.0, mix_prior: float = 0.02,
+                 mix_null: float = 0.4, mix_hand: bool = False,
                  rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -161,9 +164,50 @@ class OnlineBRAgent:
         else:
             self.belief = BeliefTracker(decay=decay, alpha=alpha, smooth=smooth,
                                         prior=prior, prior_strength=prior_strength)
+        # 对手模型装配方式：
+        #   "switch" = 硬切换（HybridOpponentModel，旧行为，保留做 A/B）
+        #   "mix"    = 按预测似然指数加权后混合（MixtureOpponentModel）
+        self.gate = gate
+        if gate == "mix":
+            self._install_mixture(mix_eta, mix_decay, mix_prior, mix_null,
+                                  mix_hand, mode)
         self.T = build_tables(mode)
         self._all = [(qa, qp) for qa in range(QI_MAX + 1) for qp in range(QI_MAX + 1)]
         self._last_br = None
+        # 评测用：最近一次决策的完整信息（分布/选择/是否为开局）。
+        # tools/bench.py 靠它算「逐决策 regret」——用分布算期望，去掉采样噪声。
+        self.last_info: Optional[Dict[str, object]] = None
+
+    def _install_mixture(self, eta: float, decay: float, prior_mix: float,
+                         null_weight: float, include_hand: bool,
+                         mode: int) -> None:
+        """把 type / context / hand / uniform 收成一条指数加权混合通道。
+
+        如果上层传进来的是 Hybrid（硬切换），这里把它**拆开**成两条独立通道——
+        混合的前提是各通道独立给分，而不是让其中一条先做路由。
+        """
+        from .learning.mixture_model import (BeliefChannel, MixtureOpponentModel,
+                                             UniformChannel)
+
+        channels: Dict[str, object] = {}
+        tm = self.type_model
+        if tm is not None:
+            inner_t = getattr(tm, "type_model", None)
+            inner_c = getattr(tm, "context_model", None)
+            if inner_t is not None or inner_c is not None:      # Hybrid
+                if inner_t is not None:
+                    channels["type"] = inner_t
+                if inner_c is not None:
+                    channels["context"] = inner_c
+            else:
+                channels["type"] = tm
+        if include_hand:
+            channels["hand"] = BeliefChannel(self.belief)
+        channels["uniform"] = UniformChannel()
+        self.type_model = MixtureOpponentModel(
+            channels, eta=eta, decay=decay, prior_mix=prior_mix,
+            null_weight=null_weight, mode=mode)
+        self.type_blend = 1.0      # 混合通道已含 hand，外层的旧混合通道让位
 
     def _opp_policy_from_belief(self) -> Dict[Tuple[int, int], Dict[str, float]]:
         pol = {}
@@ -267,11 +311,13 @@ class OnlineBRAgent:
         if (self.opening_book is not None and getattr(self.belief, "steps", 0) == 0
                 and own == self._start_qi and opp == self._start_qi):
             legal = get_valid_moves(own, mode=self.mode)
-            m = self.opening_book.sample(legal, self.rng,
-                                         opp_open=self.opp_opening_pred())
+            odist = self.opening_book.dist(legal, opp_open=self.opp_opening_pred())
+            m = sample_policy(odist, self.rng) if odist else None
             if m is not None:
                 self._last_opening = m
                 self._hist.append(((own, opp), m))
+                self.last_info = {"state": (own, opp), "dist": odist,
+                                  "move": m, "opening": True}
                 return m
         noise, step = self._round_dyn()
         opp_pol = self._opp_policy_from_belief()
@@ -300,17 +346,23 @@ class OnlineBRAgent:
         self._hist.append(((own, opp), m))
         if len(self._hist) > 24:
             self._hist.pop(0)
+        self.last_info = {"state": (own, opp), "dist": dist, "move": m,
+                          "opening": False, "loop_break": forced is not None,
+                          "step_cost": step, "br": br, "opp_policy": opp_pol}
         return m
 
     def observe(self, own, opp, own_move, opp_move):
-        self.belief.observe(own_move, opp_move)
+        # 顺序有讲究：先让对手模型**在更新前**给各通道打分（混合模型要算预测似然），
+        # 再更新手写信念。反过来会让 hand 通道用「刚看到的那一手」给自己打分。
         if self.type_model is not None:
             self.type_model.observe(own, opp, own_move, opp_move)
+        self.belief.observe(own_move, opp_move)
 
     def reset(self):
         # 跨局记忆：persist=True 时保留信念，仅每局由上层决定是否清零
         self._last_opening = None
         self._hist = []
+        self.last_info = None
         if self.type_model is not None:
             self.type_model.reset()
         if not self.persist:

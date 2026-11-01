@@ -26,6 +26,8 @@ class BRResult:
     policy: Dict[Tuple[int, int], Dict[str, float]]
     values: Dict[Tuple[int, int], float]
     meta: Dict[str, float] = field(default_factory=dict)
+    # 逐状态的动作价值，供 tools/trace.py 展开决策过程
+    q: Dict[Tuple[int, int], Dict[str, float]] = field(default_factory=dict)
 
 
 def _opp_matrix(T: Tables, opp_policy: Dict[Tuple[int, int], Dict[str, float]]
@@ -152,10 +154,12 @@ def solve_best_response(mode: int,
             break
 
     policy: Dict[Tuple[int, int], Dict[str, float]] = {}
+    qtab: Dict[Tuple[int, int], Dict[str, float]] = {}
     for si, (qa, qp) in enumerate(T.states):
         va = T.movesA[si]
         n = len(va)
         q = np.where(allow[si, :n], Q[si, :n], -1e9)
+        qtab[(qa, qp)] = {va[i]: float(q[i]) for i in range(n)}
         if temp > 0:
             w = np.exp((q - q.max()) / temp)
             w = w / w.sum()
@@ -165,4 +169,4 @@ def solve_best_response(mode: int,
             idx = [i for i in range(n) if q[i] >= best - 1e-9]
             policy[(qa, qp)] = {va[i]: 1.0 / len(idx) for i in idx}
     values = {(qa, qp): float(V[si]) for si, (qa, qp) in enumerate(T.states)}
-    return BRResult(mode, gamma, policy, values, {"sweeps": sweeps})
+    return BRResult(mode, gamma, policy, values, {"sweeps": sweeps}, qtab)

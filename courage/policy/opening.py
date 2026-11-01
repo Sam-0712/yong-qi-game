@@ -21,7 +21,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ..core.rules import MOVES_ATTR
+from ..core.rules import MOVE_CATEGORY, MOVES_ATTR
 
 
 def _norm(d: Dict[str, float]) -> Dict[str, float]:
@@ -40,19 +40,17 @@ class OpeningBook:
     meta: Dict[str, Any] = field(default_factory=dict)
 
     # ── 采样 ──
-    def sample(self, legal: List[str], rng: Optional[random.Random] = None,
-               opp_open: Optional[Dict[str, float]] = None,
-               opp_weight: float = 0.8, eps: float = 0.04) -> Optional[str]:
-        """按分布采样一首招。
+    def dist(self, legal: List[str],
+             opp_open: Optional[Dict[str, float]] = None,
+             opp_weight: float = 0.8, eps: float = 0.04) -> Dict[str, float]:
+        """首招的实际概率分布（采样前的最后一步）。
 
-        eps         ：与均匀分布混合，保证「任何合法招都可能出现」。
-        opp_open    ：跨局统计出的对手首招倾向；按首回合期望收益轻微偏置。
-        opp_weight  ：偏置强度（0 关闭）。
+        单独抽出来是为了让评测能拿到「这一手本来是多少概率」——regret 用期望值
+        计算比用实际采样到的那一手更稳（去掉智能体自身的采样噪声）。
         """
-        rng = rng or random.Random()
         legal = [m for m in legal if m]
         if not legal:
-            return None
+            return {}
         p = {m: max(float(self.probs.get(m, 0.0)), 0.0) for m in legal}
         if sum(p.values()) <= 0:                     # 表里没有这些招 → 均匀
             p = {m: 1.0 for m in legal}
@@ -66,6 +64,22 @@ class OpeningBook:
             w = max(0.0, min(1.0, opp_weight))
             p = {m: (1.0 - w) * p[m] + w * q.get(m, 0.0) for m in legal}
             p = _norm(p)
+        return p
+
+    def sample(self, legal: List[str], rng: Optional[random.Random] = None,
+               opp_open: Optional[Dict[str, float]] = None,
+               opp_weight: float = 0.8, eps: float = 0.04) -> Optional[str]:
+        """按分布采样一首招。
+
+        eps         ：与均匀分布混合，保证「任何合法招都可能出现」。
+        opp_open    ：跨局统计出的对手首招倾向；按首回合期望收益轻微偏置。
+        opp_weight  ：偏置强度（0 关闭）。
+        """
+        rng = rng or random.Random()
+        p = self.dist(legal, opp_open=opp_open, opp_weight=opp_weight, eps=eps)
+        legal = list(p)
+        if not legal:
+            return None
 
         r = rng.random()
         cum = 0.0
@@ -150,11 +164,7 @@ STYLE_OPENING = {
     "thinker":    {"attack": 1.05, "heavy": 0.9, "defense": 1.75, "dodge": 0.8, "exhale": 1.3, "noqi": 0.5},
 }
 
-_CAT_OF = {
-    "馒头": "attack", "双馒": "attack", "雷切": "attack",
-    "螺旋环": "heavy", "咏春": "heavy",
-    "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
-}
+_CAT_OF = MOVE_CATEGORY          # 定义在 core/rules.py，与因子/上下文/风格共用
 
 
 def build_style_book(scores: Dict[str, float], style: str = "balanced",

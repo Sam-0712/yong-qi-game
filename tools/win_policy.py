@@ -5,8 +5,12 @@
     python -m tools.win_policy --games 150 --belief both
     python -m tools.win_policy --belief encoder --encoder-file data/artifacts/encoder_gru_h32.json --kind br
 
-对手集合：用户 2 手/4 手套路 / 理性转化者 / 龟缩 / 猛攻 / 防守 / 随机 / 镜像 / 循环 / 反跳。
+对手集合（定义见 courage/bots/opponents.py）：用户 2 手/4 手套路 / 理性转化者（集合内）
+/ 转化者[外] / 分散压制 / 低气交替 / 龟缩 / 猛攻 / 防守 / 随机 / 镜像 / 循环 / 反跳。
 评测默认确定性播种（AI 与对手每局各自固定随机流），cap=99 仅作兜底。
+
+⚠ 本脚本只报胜率，样本量小的时候标准误很大（80 局约 ±4.5pp），
+  做模型对比请用 tools/bench.py 的逐决策 regret。
 """
 
 from __future__ import annotations
@@ -22,13 +26,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from courage.agents import BotAgent, OnlineBRAgent, run_duel
-from courage.bots.scripts import bots_by_name
-from courage.core.rules import get_valid_moves, judge, MOVES_ATTR, next_qi
+from courage.agents import OnlineBRAgent, run_duel
+from courage.bots.opponents import make_opponent
+from courage.core.rules import get_valid_moves
 from courage.learning.context_model import ContextOpponentModel
 from courage.learning.hybrid_model import HybridOpponentModel
 from courage.learning.seq_encoder import EncoderBelief, load_encoder
-from courage.learning.threat import converter_policy
 from courage.learning.type_model import OpponentTypeModel
 from courage.policy.opening import load_style_book
 from courage.policy.settings import PlaySettings
@@ -38,59 +41,27 @@ ENC = os.path.join(_ROOT, "data", "artifacts", "encoder_gru.json")
 SLACK = 0.15
 ITERS = 60
 
-
-class Scripted:
-    """按 (自方气, 对方气, 回合) 出招的脚本对手。"""
-
-    def __init__(self, fn):
-        self.fn = fn
-        self.t = 0
-
-    def reset(self):
-        self.t = 0
-
-    def act(self, own, opp):
-        v = self.fn(own, opp, self.t)
-        self.t += 1
-        legal = get_valid_moves(own, mode=0)
-        return v if v in legal else legal[0]
-
-    def observe(self, *a):
-        pass
-
-
-def _strong(qp, qa):
-    vb = get_valid_moves(qp, mode=0)
-    ours = get_valid_moves(qa, mode=0)
-    kills = [b for b in vb if all(judge(b, a) == 1 for a in ours)]
-    if kills:
-        return min(kills, key=lambda m: MOVES_ATTR[m][0])
-    safe = [b for b in vb if not any(judge(a, b) == 1 for a in ours)]
-    if not safe:
-        return max(vb, key=lambda m: MOVES_ATTR[m][1])
-    if "吐气" in safe:
-        return "吐气"
-    return max(safe, key=lambda m: (MOVES_ATTR[m][2], MOVES_ATTR[m][1]))
-
-
-EXPLOIT = ["防御", "吐气", "吐气", "咏春"]
+# (显示名, styles 里的风格名)。带 [外] 的是类型后验集合外的分布外考题。
+OPPONENTS = [
+    ("用户4手", "exploit4"),
+    ("用户2手", "two"),
+    ("转化者", "converter"),
+    ("转化者[外]", "strong"),
+    ("分散压制", "pressure"),
+    ("低气交替", "alternate_low"),
+    ("turtle", "turtle"),
+    ("aggressive", "aggressive"),
+    ("defensive", "defensive"),
+    ("random", "random"),
+    ("mirror", "mirror"),
+    ("cycler", "cycler"),
+    ("anti_jump", "anti_jump"),
+]
 
 
 def opponents():
-    return {
-        "用户4手": Scripted(lambda qp, qa, t: EXPLOIT[t] if t < 4
-                           else ("咏春" if qp >= 5 else "吐气")),
-        "用户2手": Scripted(lambda qp, qa, t: (["防御", "馒头"][t] if t < 2
-                                            else _strong(qp, qa))),
-        "转化者": Scripted(lambda qp, qa, t: _strong(qp, qa)),
-        "turtle": BotAgent(bots_by_name["turtle"]),
-        "aggressive": BotAgent(bots_by_name["aggressive"]),
-        "defensive": BotAgent(bots_by_name["defensive"]),
-        "random": BotAgent(bots_by_name["random"]),
-        "mirror": BotAgent(bots_by_name["mirror"]),
-        "cycler": BotAgent(bots_by_name["cycler"]),
-        "anti_jump": BotAgent(bots_by_name["anti_jump"]),
-    }
+    """评测对手表：脚本定义统一来自 courage/bots/opponents.py。"""
+    return {label: make_opponent(name) for label, name in OPPONENTS}
 
 
 def build(kind: str, belief: str, style: str = "balanced", robust: float = 0.3,

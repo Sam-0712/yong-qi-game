@@ -35,6 +35,16 @@ MOVES_ATTR: Dict[str, List[int]] = {
 HIT_JUMP: set = {"雷切", "咏春"}
 MAX_QI: int = 5
 MAX_ROUNDS: int = 15
+
+# 招式类别：**风格**（整体攻防偏好）与因子/上下文特征都用这一张表。
+# 此前这张表散落在 belief.py（CATEGORIES）、policy/opening.py（_CAT_OF）、
+# web/engine.js 三处，是"同一个概念多份拷贝"的典型，统一到规则层。
+MOVE_CATEGORY: Dict[str, str] = {
+    "馒头": "attack", "双馒": "attack", "雷切": "attack",
+    "螺旋环": "heavy", "咏春": "heavy",
+    "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
+}
+CATEGORY_NAMES: List[str] = ["attack", "heavy", "defense", "dodge", "exhale", "noqi"]
 MOVE_TO_IDX: Dict[str, int] = {m: i + 1 for i, m in enumerate(MOVES)}
 IDX_TO_MOVE: Dict[int, str] = {i + 1: m for i, m in enumerate(MOVES)}
 ATTACK_MOVES: set = {"馒头", "双馒", "雷切", "螺旋环", "咏春"}

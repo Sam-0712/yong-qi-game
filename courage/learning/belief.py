@@ -19,12 +19,11 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-CATEGORIES: Dict[str, str] = {
-    "馒头": "attack", "双馒": "attack", "雷切": "attack",
-    "螺旋环": "heavy", "咏春": "heavy",
-    "防御": "defense", "跳": "dodge", "吐气": "exhale", "无气拨": "noqi",
-}
-CATS = ["attack", "heavy", "defense", "dodge", "exhale", "noqi"]
+from ..core.rules import CATEGORY_NAMES, MOVE_CATEGORY
+
+# 招式→类别只在一处定义（core/rules.py），这里仅为兼容旧导入名而再导出。
+CATEGORIES: Dict[str, str] = MOVE_CATEGORY
+CATS = list(CATEGORY_NAMES)
 
 
 class BeliefTracker:
