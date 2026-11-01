@@ -47,8 +47,14 @@ def factors_vec(tracker: BeliefTracker) -> np.ndarray:
 
 
 def sequence_to_xy(own_seq: List[str], opp_seq: List[str],
-                   tracker_kwargs: Dict | None = None) -> Tuple[np.ndarray, np.ndarray]:
-    """把一条对局序列转成 (X[T,18], Y[T,14])，Y 由 BeliefTracker 现算。"""
+                   tracker_kwargs: Dict | None = None,
+                   max_len: int | None = None) -> Tuple[np.ndarray, np.ndarray]:
+    """把一条对局序列转成 (X[T,18], Y[T,14])，Y 由 BeliefTracker 现算。
+
+    max_len：只保留最后 T 步的输入（在线 EncoderBelief 也只看最近 max_len 步），
+    但 Y 仍按**完整历史**计算——这样训练目标与在线手写信念一致，不会因为
+    截断输入而把早期历史的衰减计入丢失。
+    """
     tr = BeliefTracker(**(tracker_kwargs or {}))
     X = np.zeros((len(own_seq), D_IN))
     Y = np.zeros((len(own_seq), F))
@@ -56,6 +62,9 @@ def sequence_to_xy(own_seq: List[str], opp_seq: List[str],
         tr.observe(a, b)
         X[t] = encode_step(a, b)
         Y[t] = factors_vec(tr)
+    if max_len is not None and len(own_seq) > max_len:
+        X = X[-max_len:]
+        Y = Y[-max_len:]
     return X, Y
 
 
