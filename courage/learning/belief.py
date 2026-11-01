@@ -143,6 +143,26 @@ class BeliefTracker:
         w = {m: cat_w.get(CATEGORIES.get(m, "attack"), 0.0) + 1e-6 for m in legal}
         if last_own is not None and f["mirror"] > 0.3 and last_own in w:
             w[last_own] += f["mirror"]
+
+        # ── bigram 通道：P(next_cat | 对手上一招的类别) ──
+        # 一阶频率对「交替出招」（吐气/馒头/吐气/馒头…）完全失明——它的
+        # 边际分布和均匀一样，所以 AI 学不到任何东西（实测镜像脚本 52% 卡死）。
+        # 转移概率直接看穿这种周期：馒头之后多半是吐气（def0），出手就能打死。
+        # β 随该转移行的样本量上升，样本不足时自动回退到无条件分布。
+        if self.bigram_tot > 1e-9 and self.prev_cat is not None:
+            row = self.bigram[self.prev_cat]
+            row_tot = sum(row.values())
+            if row_tot > 1e-9:
+                k = len(CATS)
+                bg = {c: (row.get(c, 0.0) + 0.3) / (row_tot + 0.3 * k) for c in CATS}
+                w_bg = {m: bg.get(CATEGORIES.get(m, "attack"), 0.0) + 1e-6 for m in legal}
+                s_bg = sum(w_bg.values())
+                if s_bg > 1e-12:
+                    w_bg = {m: v / s_bg for m, v in w_bg.items()}
+                    beta = row_tot / (row_tot + 3.0)
+                    w = {m: (1.0 - beta) * w.get(m, 0.0) + beta * w_bg.get(m, 0.0)
+                         for m in legal}
+
         s = sum(w.values())
         w = {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
         if self.smooth > 0:

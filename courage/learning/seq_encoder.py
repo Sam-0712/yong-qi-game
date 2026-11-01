@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 
 from ..core.rules import MOVE_TO_IDX, MOVES
-from .belief import BeliefTracker, CATEGORIES, CATS
+from .belief import BeliefTracker, CATEGORIES as CATEGORIES_OF, CATEGORIES, CATS
 
 FACTOR_KEYS = [
     "long_atk", "long_heavy", "long_def", "long_dodge", "long_exhale", "long_noqi",
@@ -290,11 +290,22 @@ class EncoderBelief:
         self.opp: List[str] = []
         self.last_own = None
         self.steps = 0
+        # bigram 转移统计（对手上一招类别 -> 下一招类别，衰减计数）。
+        # GRU 因子把序列压成 14 个标量后丢失了转移细节，而「交替出招」的
+        # 边际分布与均匀无异，必须用转移概率才能看穿（实测 mirror 脚本 52%）。
+        from .belief import CATS
+        self._CATS = CATS
+        self.bigram = {c: {} for c in CATS}
+        self.bigram_tot = 0.0
+        self.prev_cat = None
 
     def reset(self):
         self.own, self.opp = [], []
         self.last_own = None
         self.steps = 0
+        self.bigram = {c: {} for c in self._CATS}
+        self.bigram_tot = 0.0
+        self.prev_cat = None
 
     def observe(self, own_move, opp_move):
         if opp_move is None:
@@ -305,6 +316,20 @@ class EncoderBelief:
             self.own.pop(0); self.opp.pop(0)
         self.last_own = own_move
         self.steps += 1
+        cat = CATEGORIES_OF.get(opp_move, "attack")
+        if self.prev_cat is not None:
+            d = 0.85
+            for c in self.bigram:
+                row = self.bigram[c]
+                for k in list(row):
+                    row[k] *= d
+                    if row[k] < 1e-6:
+                        del row[k]
+            self.bigram_tot *= d
+            row = self.bigram[self.prev_cat]
+            row[cat] = row.get(cat, 0.0) + 1.0
+            self.bigram_tot += 1.0
+        self.prev_cat = cat
 
     def factors(self) -> Dict[str, float]:
         if not self.own:
@@ -335,6 +360,22 @@ class EncoderBelief:
         w = {m: cat_w.get(CATEGORIES.get(m, "attack"), 0.0) + 1e-6 for m in legal}
         if last_own is not None and f["mirror"] > 0.3 and last_own in w:
             w[last_own] += f["mirror"]
+
+        # bigram 转移通道（与手写 BeliefTracker 同款）：β 随样本量上升
+        if self.bigram_tot > 1e-9 and self.prev_cat is not None:
+            row = self.bigram[self.prev_cat]
+            row_tot = sum(row.values())
+            if row_tot > 1e-9:
+                k = len(self._CATS)
+                bg = {c: (row.get(c, 0.0) + 0.3) / (row_tot + 0.3 * k) for c in self._CATS}
+                w_bg = {m: bg.get(CATEGORIES_OF.get(m, "attack"), 0.0) + 1e-6 for m in legal}
+                s_bg = sum(w_bg.values())
+                if s_bg > 1e-12:
+                    w_bg = {m: v / s_bg for m, v in w_bg.items()}
+                    beta = row_tot / (row_tot + 3.0)
+                    w = {m: (1.0 - beta) * w.get(m, 0.0) + beta * w_bg.get(m, 0.0)
+                         for m in legal}
+
         s = sum(w.values())
         w = {m: v / s for m, v in w.items()} if s > 0 else {m: 1.0 / len(legal) for m in legal}
         if self.smooth > 0:
