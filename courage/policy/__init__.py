@@ -1,9 +1,9 @@
-"""策略层：性格 / 难度风格设置 / 自适应（旧版，B/C 阶段继续重构）。"""
+"""策略层：难度/风格/噪声（表现旋钮）+ 开局簿 + 混合工具。
 
-from .personality import Personality, PRESETS, get_personality, apply_bias
+「风格」在这里指**我方**输出分布的整体调制（``PlaySettings.style``），
+与 ``bots/style_profiles.py`` 里「对手的整体攻防偏好」是同一个概念的两个用法。
+"""
+
 from .settings import PlaySettings, STYLE_BIAS, apply_settings
 
-__all__ = [
-    "Personality", "PRESETS", "get_personality", "apply_bias",
-    "PlaySettings", "STYLE_BIAS", "apply_settings",
-]
+__all__ = ["PlaySettings", "STYLE_BIAS", "apply_settings"]

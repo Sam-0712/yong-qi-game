@@ -16,9 +16,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 
-[project.scripts]
-courage-play = "courage.cli.play:main"
-
 [tool.setuptools.packages.find]
 include = ["courage*"]
 

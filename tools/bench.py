@@ -79,11 +79,12 @@ ENCODER_FILE = "data/artifacts/encoder_gru.json"
 
 # ── 模型配置 ──
 
-MIX_TUNE = {"eta": 1.0, "decay": 1.0, "prior": 0.02, "null": 0.4}
+MIX_TUNE = {"eta": 1.0, "decay": 1.0, "prior": 0.02, "null": 0.4, "kappa": 0.0}
 
 
 def model_config(name: str, belief: str = "hand",
-                 opening: str = "safe") -> PlayerConfig:
+                 opening: str = "safe",
+                 kappa: Optional[float] = None) -> PlayerConfig:
     """只在对「对手模型通道」上做差异，其余保持生产默认。
 
     ``opening="off"`` 让 BR 决定首招——评测对手模型时应关掉开局簿，
@@ -102,7 +103,8 @@ def model_config(name: str, belief: str = "hand",
         return PlayerConfig(type_posterior=True, context_file=CONTEXT_FILE, **base)
     mix_kw = dict(gate="mix", mix_eta=MIX_TUNE["eta"],
                   mix_decay=MIX_TUNE["decay"], mix_prior=MIX_TUNE["prior"],
-                  mix_null=MIX_TUNE["null"])
+                  mix_null=MIX_TUNE["null"],
+                  channel_kappa=MIX_TUNE["kappa"] if kappa is None else float(kappa))
     if name == "mix":
         # 指数加权混合：type + context + hand + uniform 四条通道
         return PlayerConfig(type_posterior=True, context_file=CONTEXT_FILE,
@@ -140,7 +142,9 @@ class Tally:
     """一个 (模型, 风格) 的累计统计。"""
 
     __slots__ = ("games", "wins", "losses", "timeouts", "rounds",
-                 "reg_sum", "reg_n", "open_sum", "open_n", "reg_by_state")
+                 "reg_sum", "reg_n", "open_sum", "open_n", "reg_by_state",
+                 "spread_sum", "spread_n", "flip_n",
+                 "sx", "sy", "sxx", "syy", "sxy", "corr_n")
 
     def __init__(self) -> None:
         self.games = 0
@@ -153,6 +157,25 @@ class Tally:
         self.open_sum = 0.0
         self.open_n = 0
         self.reg_by_state: Dict[Tuple[int, int], float] = {}
+        # 通道分歧追踪：spread = 该步各动作上「通道均值 Q − 最坏通道 Q」的均值
+        self.spread_sum = 0.0
+        self.spread_n = 0
+        self.flip_n = 0                      # κ 改变了 argmax 的决策数
+        self.sx = self.sy = 0.0
+        self.sxx = self.syy = self.sxy = 0.0
+        self.corr_n = 0
+
+    def add_decision(self, spread: float, flip: bool, regret: float) -> None:
+        self.spread_sum += spread
+        self.spread_n += 1
+        if flip:
+            self.flip_n += 1
+        self.sx += spread
+        self.sy += regret
+        self.sxx += spread * spread
+        self.syy += regret * regret
+        self.sxy += spread * regret
+        self.corr_n += 1
 
     def add_result(self, result: int, rounds: int) -> None:
         self.games += 1
@@ -185,6 +208,30 @@ class Tally:
     def opening_cost(self) -> float:
         return self.open_sum / self.open_n if self.open_n else 0.0
 
+    # ── 通道分歧的定量追踪 ──
+    @property
+    def mean_spread(self) -> float:
+        """平均分歧：通道之间对「这一手值多少」的意见差（Q 的取值域 [-1,1]，故 ∈[0,2]）。"""
+        return self.spread_sum / self.spread_n if self.spread_n else 0.0
+
+    @property
+    def flip_rate(self) -> float:
+        """κ 真的改了 argmax 的比例——分歧到了「会改判」的程度有多少。"""
+        return self.flip_n / self.spread_n if self.spread_n else 0.0
+
+    @property
+    def corr_spread_regret(self) -> float:
+        """分歧与本步 regret 的相关系数：验证「分歧大 ⇒ 亏得多」这个假设。"""
+        n = self.corr_n
+        if n < 3:
+            return 0.0
+        mx, my = self.sx / n, self.sy / n
+        vx = self.sxx / n - mx * mx
+        vy = self.syy / n - my * my
+        if vx <= 1e-15 or vy <= 1e-15:
+            return 0.0
+        return (self.sxy / n - mx * my) / math.sqrt(vx * vy)
+
     def merge(self, other: "Tally") -> None:
         """把另一批对局的统计并进来（风格 zoo 要按"一批对手"聚合）。"""
         self.games += other.games
@@ -198,6 +245,15 @@ class Tally:
         self.open_n += other.open_n
         for k, v in other.reg_by_state.items():
             self.reg_by_state[k] = self.reg_by_state.get(k, 0.0) + v
+        self.spread_sum += other.spread_sum
+        self.spread_n += other.spread_n
+        self.flip_n += other.flip_n
+        self.sx += other.sx
+        self.sy += other.sy
+        self.sxx += other.sxx
+        self.syy += other.syy
+        self.sxy += other.sxy
+        self.corr_n += other.corr_n
 
 
 def _seed_agent(agent, seed: int) -> None:
@@ -242,6 +298,10 @@ def play(ai, opp: OpponentAgent, oracle: Optional[AugSolution], cap: int,
                 tally.reg_n += 1
                 k = (qa, qp)
                 tally.reg_by_state[k] = tally.reg_by_state.get(k, 0.0) + gap
+                sp = (info or {}).get("spread") or {}
+                if sp:
+                    tally.add_decision(sum(sp.values()) / len(sp),
+                                       bool((info or {}).get("flip")), gap)
 
         w = judge(a, b)
         ai.observe(qa, qp, a, b)
@@ -334,6 +394,10 @@ def _row(model: str, name: str, label: str, needs: str, v_star: str,
         "games": tally.games,
         "rounds": statistics.mean(tally.rounds) if tally.rounds else 0.0,
         "top_regret_state": _top_state(tally.reg_by_state),
+        "mean_spread": tally.mean_spread,
+        "flip_rate": tally.flip_rate,
+        "corr_spread_regret": tally.corr_spread_regret,
+        "spread_decisions": tally.spread_n,
         "seconds": round(seconds, 2),
     }
 
@@ -377,6 +441,31 @@ def _oracle_state(oracle: AugSolution, start: Tuple[int, int]) -> Tuple[int, ...
     vals.append(0 if "bl" in n else 0)
     vals.append(0 if "t" in n else 0)
     return tuple(vals)  # type: ignore[return-value]
+
+
+def print_track(rows: List[dict], model: str, kappa: float) -> None:
+    """通道分歧的定量追踪表。
+
+    三个量：
+      分歧   = 该步各动作上「通道均值 Q − 最坏通道 Q」的均值（Q∈[-1,1]，故 ∈[0,2]）
+      改判%  = κ 真的改变了 argmax 的决策比例 —— 「分歧到了会改变选招」有多少
+      r      = 分歧 与 本步 regret 的相关系数；若显著为正，说明「分歧大 ⇒ 亏得多」，
+               那么按分歧定价就是对的（而不是拍脑袋加一个风险系数）
+    """
+    tracked = [r for r in rows if r["spread_decisions"] > 0]
+    if not tracked:
+        return
+    print(f"\n--- 通道分歧追踪（{model}，κ={kappa:g}）---")
+    cols = [("对手", 14, "left"), ("分歧", 7, "right"), ("改判%", 7, "right"),
+            ("r(分歧,损失)", 13, "right"), ("分歧最大态", 12, "left")]
+    head = "".join(_pad(n, w, a) for n, w, a in cols)
+    print(head)
+    print("-" * _w(head))
+    for r in tracked:
+        vals = [r["style"], f"{r['mean_spread']:.3f}",
+                f"{r['flip_rate']*100:.0f}%",
+                f"{r['corr_spread_regret']:+.2f}", r["top_regret_state"]]
+        print("".join(_pad(v, w, a) for v, (_, w, a) in zip(vals, cols)))
 
 
 def _top_state(reg_by_state: Dict[Tuple[int, int], float]):
@@ -455,6 +544,8 @@ def main() -> None:
                     help="通道权重地板，防止一条通道被永久打死")
     ap.add_argument("--mix-null", dest="mix_null", type=float, default=0.4,
                     help="uniform 通道（无结构零假设）的先验权重")
+    ap.add_argument("--kappa", type=float, default=0.0,
+                    help="通道分歧定价：Q=(1-κ)·E_c[Q_c]+κ·min_c Q_c（0=风险中性）")
     ap.add_argument("--zoo", type=int, default=0,
                     help="额外采样 N 个**风格**对手（分布外泛化测验）；0=关")
     ap.add_argument("--zoo-alpha", dest="zoo_alpha", type=float, default=1.0,
@@ -477,7 +568,7 @@ def main() -> None:
         raise SystemExit("--start 需要两个整数，如 3,3")
 
     MIX_TUNE.update(eta=args.mix_eta, decay=args.mix_decay,
-                    prior=args.mix_prior, null=args.mix_null)
+                    prior=args.mix_prior, null=args.mix_null, kappa=args.kappa)
     if args.belief == "encoder":
         p = os.path.join(_ROOT, ENCODER_FILE)
         if not os.path.exists(p):
@@ -491,6 +582,7 @@ def main() -> None:
                         opening=args.opening, zoo=args.zoo,
                         zoo_alpha=args.zoo_alpha, zoo_sharp=args.zoo_sharp)
         print_block(rows, model, args.belief, args.games, start, args.opening)
+        print_track(rows, model, args.kappa)
         all_rows.extend(rows)
 
     row_names = style_list + (["风格zoo"] if args.zoo > 0 else [])

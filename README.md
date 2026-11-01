@@ -6,8 +6,27 @@
 >
 > 算法仍在快速迭代中，未来的整体架构可能会随时发生变化。
 
-> **重构中（B + C）**：目录已规范为 `courage/` 包（core / solvers / policy / learning / bots / storage / cli）+ `tools/`；
+> **重构中（B + C）**：目录已规范为 `courage/` 包（core / solvers / policy / learning / bots / storage）+ `tools/`；
 > 旧的 `src/`、`launcher.py`、PyQt GUI 已迁移或归档到 `attic/`。下方「代码」章节的结构与用法为旧版，待更新。
+
+## 5.0 现状（下方 CFR 章节为历史文档）
+
+决策链：`历史/序列 → 对手模型通道 → 通道混合 → 精确 BR → 难度/风格/噪声`。
+
+- 决策核心 `solvers/best_response.py`：36 个 `(qa,qp)` 状态上的精确 BR。**上一招与回合数
+  不进状态**（`core/state.py` 有论证），所以 36 格不是简化而是完备。
+- 对手模型是**一组可插拔通道**（`learning/`）：打法脚本库 `type_model`、上下文 n-gram
+  `context_model`、手写因子 `belief`、以及显式的「无结构」`uniform`。`mixture_model`
+  按预测似然指数加权后混合；`solvers/br_channels.py` 可按通道分歧定价。
+- **术语**：**风格 style** = 整体攻/防偏好（低维参数族，`bots/style_profiles.py`，真人更像这类）；
+  **打法 pattern** = 具体思路/定势，依赖相位（`bots/opponents.py`，用 `needs` 声明）。
+- 评测：`python -m tools.bench`（逐决策 regret + Wilson 区间；`--zoo N` 采样风格做分布外测验）、
+  `python -m tools.trace`（逐回合展开通道权重/各通道预测/Q/选择）、
+  `python -m tools.repro`（校验或重建语料与产物）。
+- 已移除（可从 git 历史取回）：旧 DCFR `solvers/cfr.py`、`policy/adaptive.py`、
+  `policy/personality.py`、`policy/winpolicy.py`、`storage/sqlite_store.py`、`cli/play.py`、
+  `learning/opponent.py`（旧 MLP），以及对应的 `tools/{train,eval,online,winrate,win_policy,simulate,distill_exp,moe_exp,calibrate}.py`。
+  RL 脚本（`tools/rl_finetune.py`、`tools/reward_distill.py`）**保留待用**。
 
 ## 游戏形式化
 
@@ -253,18 +272,22 @@ $$
 ## 使用方式
 
 ```bash
-pip install -e .        # 生产依赖仅 numpy（learning 层）
+pip install -e .        # 生产依赖仅 numpy（learning / solvers 层）
 
-# 状态空间规模（验证抽象与压缩）
-python -m tools.train states
+# 0) 校验 data/ 下的语料与产物（缺失会让整条学习链静默回退）
+python -m tools.repro --check
 
-# 训练并评估小型对手模型（C 的最小闭环）
-python -m tools.train opponent --bot aggressive --save --verbose
-python -m tools.eval   opponent --bot aggressive
+# 1) 重建语料与上下文对手模型（约 1~2 分钟）
+python -m tools.repro --build --games 20000
 
-# 旧版命令行对局（过渡入口，使用旧 CFR + SQLite）
-python -m courage.cli.play
+# 2) 评测：逐决策 regret（精确 oracle）+ 置信区间胜率
+python -m tools.bench --models hand,type,context,hybrid,mix --games 40
+python -m tools.bench --zoo 12 --games 30 --start 1,1 --opening off   # 分布外（风格采样）
+
+# 3) 逐回合展开一局，看通道权重 / 各通道预测 / Q / 本步 regret
+python -m tools.trace --style defensive --model hybrid --start 1,1
+python -m tools.trace --zoo-index 3 --model mix --kappa 0.2
 ```
 
-**依赖**：Python 3.10+；第三方仅 `numpy`（learning 层）。
+**依赖**：Python 3.10+；第三方仅 `numpy`（learning / solvers 层）。
 

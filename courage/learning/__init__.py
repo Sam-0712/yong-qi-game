@@ -1,12 +1,14 @@
-"""学习层：信念因子 + 小型对手模型（C）。本层 numpy 仅用于 opponent 的 MLP。"""
+"""学习层：信念因子 + 对手模型通道（类型后验 / 上下文 / 混合 / 序列编码器）。
+
+通道可以叠加：``MixtureOpponentModel`` 把其中几条按预测似然指数加权后混合，
+再由 ``solvers/br_channels.py`` 按通道分歧定价。
+"""
 
 from .belief import BeliefTracker
-from .opponent import OpponentModel, features
 from .type_model import OpponentTypeModel
 from .context_model import ContextOpponentModel
 from .hybrid_model import HybridOpponentModel
 from .mixture_model import MixtureOpponentModel, UniformChannel
 
-__all__ = ["BeliefTracker", "OpponentModel", "features", "OpponentTypeModel",
-           "ContextOpponentModel", "HybridOpponentModel",
-           "MixtureOpponentModel", "UniformChannel"]
+__all__ = ["BeliefTracker", "OpponentTypeModel", "ContextOpponentModel",
+           "HybridOpponentModel", "MixtureOpponentModel", "UniformChannel"]

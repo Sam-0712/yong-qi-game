@@ -215,6 +215,24 @@ class MixtureOpponentModel:
         dists = self._channel_dists(qa, qp, legal, lo)
         return self._mix(dists, self.weights(), legal)
 
+    def channel_policies(self, states, last_own: Optional[str] = None
+                         ) -> Tuple[Dict[str, Dict], Dict[str, float]]:
+        """把 36 个状态的对手模型按通道拆开，供 ``solvers/br_channels.py`` 使用。
+
+        返回 ``({通道: {(qa,qp): {move: p}}}, 通道权重)``。风险定价需要**逐通道的
+        Q**，所以这里不能在``opp_weights``里先混合——那样信息就没了。
+        """
+        lo = self.prev_own if last_own is None else last_own
+        out: Dict[str, Dict] = {c: {} for c in self.names}
+        for qa, qp in states:
+            legal = get_valid_moves(qp, mode=self.mode)
+            if not legal:
+                continue
+            dists = self._channel_dists(qa, qp, legal, lo)
+            for c in self.names:
+                out[c][(qa, qp)] = dists[c]
+        return out, self.weights()
+
     # ── 诊断 / trace ──
     def breakdown(self, qa: int, qp: int, legal: List[str],
                   last_own: Optional[str] = None

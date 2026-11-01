@@ -23,6 +23,7 @@ from .learning.threat import blend_with_converter
 from .policy.mix import blend, confidence
 from .policy.settings import PlaySettings, apply_settings
 from .solvers.best_response import solve_best_response
+from .solvers.br_channels import solve_channel_br
 from .solvers.equilibrium import build_tables
 
 
@@ -120,6 +121,7 @@ class OnlineBRAgent:
                  gate: str = "switch", mix_eta: float = 1.0,
                  mix_decay: float = 1.0, mix_prior: float = 0.02,
                  mix_null: float = 0.4, mix_hand: bool = False,
+                 channel_kappa: float = 0.0,
                  rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
@@ -141,6 +143,8 @@ class OnlineBRAgent:
         self.conf_scale = conf_scale
         self.eq_mix = eq_mix
         self.robust = robust
+        # 通道分歧定价：Q = (1-κ)·E_c[Q_c] + κ·min_c Q_c。0 = 风险中性（等价旧 BR）
+        self.channel_kappa = min(1.0, max(0.0, float(channel_kappa)))
         # ── 轮数退火（round annealing）──
         # 实测死锁：双方都按确定性 argmax 出招时会形成镜像循环
         #   (0,0) 吐气 → (1,1) 馒头 → (0,0) 吐气 → …   可以无限平局
@@ -320,14 +324,25 @@ class OnlineBRAgent:
                                   "move": m, "opening": True}
                 return m
         noise, step = self._round_dyn()
-        opp_pol = self._opp_policy_from_belief()
-        br = solve_best_response(self.mode, opp_pol, gamma=self.gamma,
-                                 max_sweeps=self.br_sweeps, tol=1e-5,
-                                 step_cost=step, tables=self.T,
-                                 qi_floor=self.qi_floor, floor_win=self.floor_win,
-                                 temp=self.temp, death_penalty=self.death_penalty,
-                                 kappa=self.kappa, zero_penalty=self.zero_penalty)
         legal = get_valid_moves(own, mode=self.mode)
+        chan = self._channel_policies()
+        opp_pol = None
+        if chan is not None:
+            # 通道可用：按通道分歧定价（κ=0 时与旧实现等价，见 br_channels 的恒等式）
+            pols, wts = chan
+            br = solve_channel_br(
+                self.mode, pols, weights=wts, kappa=self.channel_kappa,
+                gamma=self.gamma, max_sweeps=self.br_sweeps, tol=1e-5,
+                step_cost=step, tables=self.T, qi_floor=self.qi_floor,
+                floor_win=self.floor_win, zero_penalty=self.zero_penalty)
+        else:
+            opp_pol = self._opp_policy_from_belief()
+            br = solve_best_response(self.mode, opp_pol, gamma=self.gamma,
+                                     max_sweeps=self.br_sweeps, tol=1e-5,
+                                     step_cost=step, tables=self.T,
+                                     qi_floor=self.qi_floor, floor_win=self.floor_win,
+                                     temp=self.temp, death_penalty=self.death_penalty,
+                                     kappa=self.kappa, zero_penalty=self.zero_penalty)
         base = br.policy.get((own, opp)) or {m: 1.0 / len(legal) for m in legal}
         # 安全网：无信息时用均衡混合（随机、不可被脚本化），有信息后转向 BR 剥削
         if self.eq_policy is not None:
@@ -346,10 +361,31 @@ class OnlineBRAgent:
         self._hist.append(((own, opp), m))
         if len(self._hist) > 24:
             self._hist.pop(0)
-        self.last_info = {"state": (own, opp), "dist": dist, "move": m,
-                          "opening": False, "loop_break": forced is not None,
-                          "step_cost": step, "br": br, "opp_policy": opp_pol}
+        info = {"state": (own, opp), "dist": dist, "move": m,
+                "opening": False, "loop_break": forced is not None,
+                "step_cost": step, "br": br, "opp_policy": opp_pol,
+                "kappa": self.channel_kappa}
+        if chan is not None:
+            # 逐通道 Q 与分歧量：定量追踪「通道之间分歧了多少、分歧花在哪」
+            info.update({
+                "channel_w": dict(br.weights),
+                "q_mean": br.q_mean.get((own, opp), {}),
+                "q_risk": br.q_risk.get((own, opp), {}),
+                "q_channels": {c: dict(t.get((own, opp), {}))
+                               for c, t in br.q_channels.items()},
+                "spread": br.spread(own, opp),
+                "flip": br.flip(own, opp),
+            })
+        self.last_info = info
         return m
+
+    def _channel_policies(self):
+        """通道模型可用时返回 (逐通道策略, 通道权重)；否则 None（走旧的单模型路径）。"""
+        tm = self.type_model
+        fn = getattr(tm, "channel_policies", None)
+        if not callable(fn):
+            return None
+        return fn(self._all, last_own=self.belief.last_own)
 
     def observe(self, own, opp, own_move, opp_move):
         # 顺序有讲究：先让对手模型**在更新前**给各通道打分（混合模型要算预测似然），

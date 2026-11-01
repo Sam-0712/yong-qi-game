@@ -182,6 +182,26 @@ def _print_round(rnd: int, qa: int, qp: int, al: int, bl: int, t: int,
         qs = "  ".join(f"{m} {v:+.3f}" for m, v in
                        sorted(qrow.items(), key=lambda kv: -kv[1]))
         print(f"    Q(真值)    : {qs}")
+
+    # 通道层面的 Q 与分歧：定量追踪「通道之间到底吵了多少」
+    qm = info.get("q_mean") or {}
+    if qm:
+        top = sorted(qm.items(), key=lambda kv: -kv[1])
+        top = top if wide else top[:3]
+        print("    Q(通道均值): " + "  ".join(f"{m} {v:+.3f}" for m, v in top))
+        sp = info.get("spread") or {}
+        if sp:
+            sps = sorted(sp.items(), key=lambda kv: -kv[1])
+            sps = sps if wide else sps[:3]
+            print("    Q 分歧     : " + "  ".join(f"{m} {v:.2f}" for m, v in sps))
+        kappa = float(info.get("kappa") or 0.0)
+        qr = info.get("q_risk") or {}
+        if kappa > 0 and qr:
+            top = sorted(qr.items(), key=lambda kv: -kv[1])
+            top = top if wide else top[:3]
+            print(f"    Q(κ={kappa:g})   : "
+                  + "  ".join(f"{m} {v:+.3f}" for m, v in top)
+                  + ("   ← 改判" if info.get("flip") else ""))
     pol = (info.get("br").policy.get((qa, qp)) if info.get("br") else None) or {}
     if pol:
         print(f"    BR         : {_top(pol, None if wide else 3)}"
@@ -208,6 +228,8 @@ def main() -> None:
     ap.add_argument("--max-rounds", dest="max_rounds", type=int, default=99,
                     help="最多展开多少回合明细")
     ap.add_argument("--wide", action="store_true", help="不截断，打印全部招式")
+    ap.add_argument("--kappa", type=float, default=0.0,
+                    help="通道分歧定价 κ（0=风险中性）")
     ap.add_argument("--zoo-index", dest="zoo_index", type=int, default=-1,
                     help=">=0 时改为展开第 N 个采样**风格**（与 bench --zoo 同一批）")
     ap.add_argument("--zoo-n", dest="zoo_n", type=int, default=12)
@@ -224,7 +246,7 @@ def main() -> None:
     if len(start) != 2:
         raise SystemExit("--start 需要两个整数，如 1,1")
 
-    cfg = model_config(args.model, args.belief, args.opening)
+    cfg = model_config(args.model, args.belief, args.opening, kappa=args.kappa)
     ai = build_player(cfg)
     if args.zoo_index >= 0:
         profs = sample_zoo(args.zoo_n, seed=args.zoo_seed, alpha=args.zoo_alpha,
