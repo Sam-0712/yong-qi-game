@@ -2,5 +2,9 @@
 
 from .belief import BeliefTracker
 from .opponent import OpponentModel, features
+from .type_model import OpponentTypeModel
+from .context_model import ContextOpponentModel
+from .hybrid_model import HybridOpponentModel
 
-__all__ = ["BeliefTracker", "OpponentModel", "features"]
+__all__ = ["BeliefTracker", "OpponentModel", "features", "OpponentTypeModel",
+           "ContextOpponentModel", "HybridOpponentModel"]

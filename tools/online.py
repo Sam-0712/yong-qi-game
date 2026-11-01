@@ -19,6 +19,7 @@ if _ROOT not in sys.path:
 from courage.agents import (BotAgent, OnlineBRAgent, ScriptedAgent,
                             TableAgent, run_duel, PRIORS)
 from courage.bots.scripts import bots_by_name
+from courage.learning.type_model import OpponentTypeModel
 from courage.core.rules import MOVES_ATTR, get_valid_moves, judge, next_qi
 from courage.policy.settings import PlaySettings
 from courage.policy.opening import load_style_book
@@ -35,7 +36,17 @@ def _book(args):
 
 
 def _robust(args):
+    # 类型后验已含 converter；开启时不再叠常数幽灵，避免重复计数。
+    if getattr(args, "type_posterior", False):
+        return 0.0
     return float(getattr(args, "robust", 0.3))
+
+
+def _type_model(args):
+    if not getattr(args, "type_posterior", False):
+        return None
+    return OpponentTypeModel(mode=args.mode, decay=args.type_decay,
+                             eps=args.type_eps)
 
 
 def _fmt(res) -> str:
@@ -73,12 +84,16 @@ def run_all(args):
                                decay=args.decay,
                                alpha=args.alpha, smooth=args.smooth,
                                step_cost=args.step_cost, br_sweeps=args.br_sweeps,
-                               prior=PRIORS[args.prior], belief_like=belief)
-        r_on = run_duel(online, opp1, args.mode, games=args.games, cap=args.cap)
+                               prior=PRIORS[args.prior], belief_like=belief,
+                               type_model=_type_model(args),
+                               type_blend=args.type_blend)
+        r_on = run_duel(online, opp1, args.mode, games=args.games, cap=args.cap,
+                        seed=args.seed)
 
         opp2 = BotAgent(bots_by_name[name])
         eq = TableAgent(eq_pol, PlaySettings(), args.mode) if eq_pol else None
-        r_eq = run_duel(eq, opp2, args.mode, games=args.games, cap=args.cap) if eq else None
+        r_eq = (run_duel(eq, opp2, args.mode, games=args.games, cap=args.cap,
+                         seed=args.seed) if eq else None)
         eqs = _fmt(r_eq) if r_eq else "(无均衡表)"
         print(f"{name:<10}{_fmt(r_on):<44}{eqs:<30}")
 
@@ -133,7 +148,9 @@ def run_memory(args):
                        decay=args.decay,
                        alpha=args.alpha, smooth=args.smooth,
                        step_cost=args.step_cost, br_sweeps=args.br_sweeps,
-                       persist=True, prior=PRIORS[args.prior])
+                       persist=True, prior=PRIORS[args.prior],
+                       type_model=_type_model(args),
+                       type_blend=args.type_blend)
     bid = args.belief_id or args.opp
     if args.load_belief:
         bt = load_belief(bid)
@@ -146,7 +163,8 @@ def run_memory(args):
     else:
         rec = None
     res = run_duel(ai, opp, args.mode, games=args.games, cap=args.cap,
-                   reset_per_game=False, recorder=rec, opp_label=args.opp)
+                   seed=args.seed, reset_per_game=False, recorder=rec,
+                   opp_label=args.opp)
 
     results, rounds = res["results"], res["rounds"]
     k = min(args.first_k, len(results))
@@ -181,7 +199,15 @@ def main() -> None:
     ap.add_argument("--record", nargs="?", const="default", default="",
                     help="记录双方序列到 JSONL（省略值则用默认路径）")
     ap.add_argument("--robust", type=float, default=0.3,
-                    help="幽灵威胁（理性转化者）权重，按不确定性缩放")
+                    help="幽灵威胁（理性转化者）权重；类型后验开启时自动置 0")
+    ap.add_argument("--type-posterior", dest="type_posterior", action="store_true",
+                    help="启用对手类型后验（4手/2手/转化者/镜像等）")
+    ap.add_argument("--type-blend", dest="type_blend", type=float, default=1.0,
+                    help="类型后验与序列信念的混合权重（1=纯类型）")
+    ap.add_argument("--type-decay", dest="type_decay", type=float, default=1.0,
+                    help="类型权重遗忘率（<1 更快遗忘）")
+    ap.add_argument("--type-eps", dest="type_eps", type=float, default=0.02,
+                    help="类型似然下限")
     ap.add_argument("--opening", default="safe", choices=["safe", "off"],
                     help="首招：safe=开局簿采样 / off=BR 决定")
     ap.add_argument("--prior", default="none", choices=list(PRIORS),
@@ -201,7 +227,8 @@ def main() -> None:
     ap.add_argument("--first-k", dest="first_k", type=int, default=10)
     ap.add_argument("--mode", type=int, default=0)
     ap.add_argument("--games", type=int, default=150)
-    ap.add_argument("--cap", type=int, default=200)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
     ap.add_argument("--decay", type=float, default=0.85)
     ap.add_argument("--alpha", type=float, default=0.20, help="Dirichlet 平滑伪计数")
     ap.add_argument("--smooth", type=float, default=0.05, help="对手分布与均匀混合比例")

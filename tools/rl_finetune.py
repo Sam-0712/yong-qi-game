@@ -87,7 +87,8 @@ def main():
     ap.add_argument("--encoder-file", dest="encoder_file",
                     default="data/artifacts/encoder_gru.json")
     ap.add_argument("--episodes", type=int, default=400)
-    ap.add_argument("--cap", type=int, default=40)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
     ap.add_argument("--games", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -102,14 +103,14 @@ def main():
     print("\n[策略头(结果微调)] vs 各 bot")
     for name in evals:
         r = run_duel(HeadAgent(head, model, rng=random.Random(args.seed)),
-                     BotAgent(bots_by_name[name]), games=args.games, cap=60)
+                     BotAgent(bots_by_name[name]), games=args.games, cap=99)
         line(name, r)
 
     print("\n[解析 BR(编码器因子, step=0.15)] vs 各 bot（对照）")
     for name in evals:
         ai = OnlineBRAgent(step_cost=0.15, br_sweeps=300,
                            belief_like=EncoderBelief(model))
-        r = run_duel(ai, BotAgent(bots_by_name[name]), games=args.games, cap=60)
+        r = run_duel(ai, BotAgent(bots_by_name[name]), games=args.games, cap=99)
         line(name, r)
 
 

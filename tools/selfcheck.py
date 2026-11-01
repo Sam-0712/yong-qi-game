@@ -27,7 +27,8 @@ def main():
 
     for name in ("turtle", "defensive", "aggressive"):
         p = build_player(PlayerConfig())
-        r = run_duel(p, BotAgent(bots_by_name[name]), mode=0, games=6, cap=60)
+        r = run_duel(p, BotAgent(bots_by_name[name]), mode=0, games=6,
+                     cap=99, seed=1)
         p.close()
         print(f"  vs {name:<10} 胜{r['wins']} 负{r['losses']} 超{r['timeouts']} "
               f"| 回合 {statistics.mean(r['rounds']):.1f}")

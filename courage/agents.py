@@ -116,7 +116,8 @@ class OnlineBRAgent:
                  eq_mix: Optional[float] = None,
                  round_total: int = 15, noise0: float = 0.0,
                  urgency: float = 3.0, anti_loop: bool = True, loop_risk: float = 0.9,
-                 belief_like=None, rng: Optional[random.Random] = None):
+                 belief_like=None, type_model=None, type_blend: float = 0.0,
+                 rng: Optional[random.Random] = None):
         self.settings = settings or PlaySettings()
         self.mode = mode
         self.gamma = gamma
@@ -130,6 +131,9 @@ class OnlineBRAgent:
         self.zero_penalty = zero_penalty
         self.opening_book = opening_book
         self.opp_open_stats = opp_open_stats or {}
+        # 类型后验：belief 之外的另一条对手模型通道；type_blend=0 时完全关闭。
+        self.type_model = type_model
+        self.type_blend = min(1.0, max(0.0, type_blend))
         self.eq_policy = eq_policy          # 安全网：均衡策略（None=纯 BR）
         self.conf_scale = conf_scale
         self.eq_mix = eq_mix
@@ -176,6 +180,10 @@ class OnlineBRAgent:
         for (qa, qp) in self._all:
             legal = get_valid_moves(qp, mode=self.mode)
             w = self.belief.opp_weights(legal, last_own=self.belief.last_own)
+            if self.type_model is not None and self.type_blend > 0:
+                wt = self.type_model.opp_weights(
+                    qa, qp, legal, last_own=self.belief.last_own)
+                w = blend(wt, w, 1.0 - self.type_blend)
             if beta > 0:
                 # 幽灵类型：理性转化者（对手会趁我无力时蓄气/收割）
                 w = blend_with_converter(w, legal, get_valid_moves(qa, mode=self.mode), beta)
@@ -296,30 +304,53 @@ class OnlineBRAgent:
 
     def observe(self, own, opp, own_move, opp_move):
         self.belief.observe(own_move, opp_move)
+        if self.type_model is not None:
+            self.type_model.observe(own, opp, own_move, opp_move)
 
     def reset(self):
         # 跨局记忆：persist=True 时保留信念，仅每局由上层决定是否清零
         self._last_opening = None
         self._hist = []
+        if self.type_model is not None:
+            self.type_model.reset()
         if not self.persist:
             self.belief.reset()
 
 
+def _seed_agent(agent, seed: int) -> None:
+    """把每局的随机流固定下来；兼容 CouragePlayer 这类包装对象。"""
+    target = getattr(agent, "agent", agent)
+    if hasattr(target, "rng"):
+        target.rng = random.Random(seed)
+
+
 def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
-             games: int = 200, cap: int = 200,
+             games: int = 200, cap: int = 99,
              rng: Optional[random.Random] = None,
+             seed: Optional[int] = None,
              reset_per_game: bool = True,
              recorder=None, opp_label: str = "?") -> Dict[str, object]:
     """跑多局。reset_per_game=False 可实现跨局记忆（不清空 AI 信念）。
-    recorder 若提供（有 .log(**rec)），每局落盘双方完整序列。"""
-    rng = rng or random.Random()
+    recorder 若提供（有 .log(**rec)），每局落盘双方完整序列。
+
+    确定性：给出 seed（或 rng）后，每局都用独立的、可复现的随机流分别
+    播种 AI 与对手；这样同配置重跑结果逐局一致，也便于 N 个模型做配对评测。
+    cap=99 只是兜底（防死循环），不作为产品结算回合上限。
+    """
+    game_rng = random.Random(seed) if seed is not None else rng
     wins = losses = timeouts = 0
     rounds: List[int] = []
     results: List[int] = []
+    game_seeds: List[int] = []
     for g in range(games):
         opp.reset()
         if reset_per_game:
             ai.reset()
+        if game_rng is not None:
+            gs = game_rng.randrange(1 << 30)
+            game_seeds.append(gs)
+            _seed_agent(ai, gs * 2 + 1)
+            _seed_agent(opp, gs * 2 + 2)
         qa = qp = 3
         result = 0
         ai_seq: List[str] = []
@@ -345,9 +376,12 @@ def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
             rounds.append(cap)
         results.append(result)
         if recorder is not None:
-            recorder.log(game=g, opp=opp_label, mode=mode, result=result,
-                         rounds=rounds[-1], ai_seq=ai_seq, opp_seq=opp_seq,
-                         qi_seq=qi_seq)
+            rec = dict(game=g, opp=opp_label, mode=mode, result=result,
+                       rounds=rounds[-1], ai_seq=ai_seq, opp_seq=opp_seq,
+                       qi_seq=qi_seq)
+            if game_seeds:
+                rec["seed"] = game_seeds[-1]
+            recorder.log(**rec)
         if result == 1:
             wins += 1
         elif result == -1:
@@ -355,4 +389,5 @@ def run_duel(ai: Agent, opp: Agent, mode: int = MODE_STANDARD,
         else:
             timeouts += 1
     return {"wins": wins, "losses": losses, "timeouts": timeouts,
-            "rounds": rounds, "results": results, "games": games}
+            "rounds": rounds, "results": results, "games": games,
+            "seeds": game_seeds, "cap": cap}

@@ -65,7 +65,8 @@ def main() -> None:
     ap.add_argument("--noise", type=float, default=None,
                     help="额外随机噪声；缺省按模式取默认（mode1 更大）")
     ap.add_argument("--games", type=int, default=300)
-    ap.add_argument("--cap", type=int, default=200)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
     ap.add_argument("--gamma", type=float, default=0.95)
     ap.add_argument("--inner", type=int, default=800)
     ap.add_argument("--sweeps", type=int, default=400)

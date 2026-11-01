@@ -85,7 +85,7 @@ def make_ai(mode: int, qi_floor: int = 0, floor_win: float = 1.0,
                          rng=random.Random(0))
 
 
-def play_forced(ai, opp, first: str, cap: int = 100):
+def play_forced(ai, opp, first: str, cap: int = 99):
     """AI 首招强制为 first，其余走正式策略。返回 (result, rounds)。"""
     ai.reset()
     opp.reset()
@@ -221,7 +221,8 @@ def main() -> None:
         p.add_argument("--mode", type=int, default=0)
         p.add_argument("--qi-floor", dest="qi_floor", type=int, default=1)
         p.add_argument("--floor-win", dest="floor_win", type=float, default=1.0)
-        p.add_argument("--cap", type=int, default=100)
+        p.add_argument("--cap", type=int, default=99,
+                       help="兜底回合上限（不作为产品结算上限）")
 
     b = sub.add_parser("build")
     b.add_argument("--games", type=int, default=30, help="每个对手每个首招的局数")

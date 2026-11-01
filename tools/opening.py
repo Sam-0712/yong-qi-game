@@ -102,7 +102,9 @@ def br_first_move(mode=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--games", type=int, default=10)
-    ap.add_argument("--cap", type=int, default=50)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
+    ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args()
 
     table = info_gain_table(0)
@@ -121,7 +123,7 @@ def main():
             base = OnlineBRAgent(PlaySettings(), mode=0, br_sweeps=150)
             ai = OpeningAgent(base, first)
             r = run_duel(ai, BotAgent(bots_by_name[name]), mode=0,
-                         games=args.games, cap=args.cap)
+                         games=args.games, cap=args.cap, seed=args.seed)
             row.append(f"{r['wins']/r['games']:>10.0%}/{statistics.mean(r['rounds']):>4.1f}r")
         print(f"{name:<12}" + "".join(f"{c:>22}" for c in row))
 

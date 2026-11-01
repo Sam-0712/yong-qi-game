@@ -28,7 +28,9 @@ def main():
     ap.add_argument("--floors", default="0,0.02")
     ap.add_argument("--opps", default="turtle,defensive,random")
     ap.add_argument("--games", type=int, default=8)
-    ap.add_argument("--cap", type=int, default=50)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
+    ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--br-sweeps", dest="br_sweeps", type=int, default=150)
     ap.add_argument("--step-cost", dest="step_cost", type=float, default=0.03)
     args = ap.parse_args()
@@ -48,7 +50,7 @@ def main():
                 ai = OnlineBRAgent(step_cost=args.step_cost, br_sweeps=args.br_sweeps,
                                    belief_like=EncoderBelief(model, tau=tau, floor=fl))
                 r = run_duel(ai, BotAgent(bots_by_name[o]), mode=0,
-                             games=args.games, cap=args.cap)
+                             games=args.games, cap=args.cap, seed=args.seed)
                 wr = r["wins"] / r["games"]
                 if r["timeouts"]:
                     cells.append(f"{wr:5.0%}(T{r['timeouts']})")

@@ -86,7 +86,8 @@ def main():
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--games", type=int, default=20)
-    ap.add_argument("--cap", type=int, default=60)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 

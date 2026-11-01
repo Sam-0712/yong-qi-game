@@ -28,7 +28,7 @@ def sample_dist(dist: Dict[str, float], rng: random.Random) -> str:
 
 
 def play_game(policy_ai: PolicyFn, policy_opp: PolicyFn,
-              mode: int = MODE_STANDARD, cap: int = 200,
+              mode: int = MODE_STANDARD, cap: int = 99,
               rng: random.Random | None = None) -> Tuple[int, int]:
     rng = rng or random.Random()
     qa = qp = 3

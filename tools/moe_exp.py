@@ -119,7 +119,8 @@ def main():
     ap.add_argument("--steps", type=int, default=12)
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--games", type=int, default=10)
-    ap.add_argument("--cap", type=int, default=60)
+    ap.add_argument("--cap", type=int, default=99,
+                    help="兜底回合上限（不作为产品结算上限）")
     args = ap.parse_args()
 
     tr = prep(gen(args.train, args.steps, 0, seed=1))

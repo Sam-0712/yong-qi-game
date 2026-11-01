@@ -39,6 +39,13 @@ class PlayerConfig:
     difficulty: float = 1.0
     style: str = "balanced"
     noise: float = 0.0
+    # 对手模型：类型后验（默认）或上下文学习模型（context_file 非空时优先）
+    type_posterior: bool = True
+    context_file: str = "data/artifacts/context_all.json"
+    type_blend: float = 1.0                   # 1=纯类型后验，0=纯序列信念
+    type_decay: float = 1.0                   # <1 时更快遗忘旧证据
+    type_eps: float = 0.02                    # 观测似然下限（不把类型一票否决）
+    type_smooth: float = 0.02
     # 抗针对性（见 docs/勇气5.0算法修正-针对性漏洞.md）
     opening: str = "safe"                     # "safe"=开局簿采样 / "off"=BR 决定首招
     opening_book: str = "opening_mode0.json"  # 训练产物；缺失则用内置安全分布
@@ -63,6 +70,7 @@ class PlayerConfig:
 def describe(cfg: PlayerConfig) -> str:
     return (f"[5.0] mode={cfg.mode} belief={cfg.belief_source} "
             f"tau={cfg.tau} step={cfg.step_cost} prior={cfg.prior} "
+            f"type={'on' if cfg.type_posterior else 'off'} "
             f"style={cfg.style} diff={cfg.difficulty} noise={cfg.noise}")
 
 
@@ -82,19 +90,40 @@ class CouragePlayer:
             else:
                 self.cfg.belief_source = "hand"  # 编码器缺失，回退
 
+        type_model = None
+        if self.cfg.type_posterior:
+            from .learning.type_model import OpponentTypeModel
+            type_model = OpponentTypeModel(
+                mode=self.cfg.mode, decay=self.cfg.type_decay,
+                eps=self.cfg.type_eps, smooth=self.cfg.type_smooth)
+        context_model = None
+        if self.cfg.context_file:
+            path = _resolve(self.cfg.context_file)
+            if os.path.exists(path):
+                from .learning.context_model import ContextOpponentModel
+                context_model = ContextOpponentModel.load(path)
+        if type_model is not None and context_model is not None:
+            from .learning.hybrid_model import HybridOpponentModel
+            type_model = HybridOpponentModel(type_model, context_model)
+        elif type_model is None and context_model is not None:
+            type_model = context_model
+
         self.agent = OnlineBRAgent(
             settings=PlaySettings(self.cfg.difficulty, self.cfg.style, self.cfg.noise),
             mode=self.cfg.mode, gamma=self.cfg.gamma,
             decay=self.cfg.decay, alpha=self.cfg.alpha, smooth=self.cfg.smooth,
             step_cost=self.cfg.step_cost, br_sweeps=self.cfg.br_sweeps,
             persist=self.cfg.persist, prior=PRIORS.get(self.cfg.prior),
-            qi_floor=self.cfg.qi_floor, robust=self.cfg.robust,
+            qi_floor=self.cfg.qi_floor,
+            # 类型/上下文模型已包含或学到的对手模型；再叠常数幽灵会重复计数。
+            robust=(0.0 if type_model is not None else self.cfg.robust),
             zero_penalty=self.cfg.zero_penalty,
             round_total=self.cfg.round_total, noise0=self.cfg.noise0,
             urgency=self.cfg.urgency, anti_loop=self.cfg.anti_loop,
             loop_risk=self.cfg.loop_risk,
             opening_book=self._opening_book(),
-            belief_like=belief_like, rng=random.Random(self.cfg.seed),
+            belief_like=belief_like, type_model=type_model,
+            type_blend=self.cfg.type_blend, rng=random.Random(self.cfg.seed),
         )
 
         if self.cfg.persist and self.cfg.opp_id and self.cfg.belief_source == "hand":
